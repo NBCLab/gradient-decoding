@@ -1,0 +1,8 @@
+# MAC OS files
+.DS_Store
+
+# VS Code
+.vscode
+
+# Data
+data/HCP_S1200_1003_rfMRI_MSMAll_groupPCA_d4500ROW_zcorr.dconn.nii
