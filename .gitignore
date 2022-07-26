@@ -15,3 +15,6 @@ jobs/log
 
 # Templates
 templates/
+
+# Python
+__pycache__

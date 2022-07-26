@@ -3,15 +3,17 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem-per-cpu=12gb
+#SBATCH --mem-per-cpu=20gb
 #SBATCH --account=iacc_nbc
 #SBATCH --qos=pq_nbc
-#SBATCH --partition=IB_16C_96G
+#SBATCH --partition=IB_40C_512G
 # Outputs ----------------------------------
 #SBATCH --output=log/%x_%j.out
 #SBATCH --error=log/%x_%j.err
 # ------------------------------------------
 
+# IB_40C_512G, for running workflow
+# investor, for testing
 pwd; hostname; date
 
 #==============Shell script==============#

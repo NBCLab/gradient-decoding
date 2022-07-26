@@ -5,3 +5,6 @@ export project_name="[GRADEC]"
 
 # Set Python path to project-specific folder
 PYTHONPATH="${PYTHONPATH}:/home/data/nbc/misc-projects/Peraza_GradientDecoding/"
+
+# Change directory
+cd /home/data/nbc/misc-projects/Peraza_GradientDecoding
