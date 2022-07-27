@@ -5,6 +5,7 @@ import pickle
 import nibabel as nib
 import numpy as np
 from brainspace.gradient import GradientMaps
+from sklearn.metrics import silhouette_score
 from surfplot.utils import add_fslr_medial_wall
 
 import utils
@@ -100,7 +101,7 @@ def hcp_gradient(data_dir, template_dir, output_dir):
     return principal_gradient
 
 
-def gradient_segmentation():
+def gradient_segmentation(gradient, output_dir):
     """2. Segmentation and Gradient Maps: Evaluate three different segmentation approaches to
     split the gradient spectrum into a finite number of brain maps.
 
@@ -118,11 +119,50 @@ def gradient_segmentation():
     -------
     None : :obj:``
     """
+    # 2.1. Segment the gradient into k ≥ 3 segments.
+    n_segments = 30
 
+    # Percentile Segmentation
+    percent_segments, percent_labels = utils.percent_segmentation(gradient, n_segments)
+
+    # K-Means
+    kmeans_labels = utils.kmeans_segmentation(gradient, n_segments)
+
+    # KDE
+    kde_segments, kde_labels = utils.kde_segmentation(gradient, output_dir, n_segments)
+
+    assert len(percent_labels) == n_segments
+    assert len(kmeans_labels) == n_segments
+    assert len(kde_labels) == n_segments
+    # Silhouette measures
+    percent_scores = np.zeros(n_segments)
+    kmeans_scores = np.zeros(n_segments)
+    kde_scores = np.zeros(n_segments)
+    for segment_i in range(len(kde_labels)):
+        percent_scores[segment_i] = silhouette_score(
+            gradient, percent_labels[segment_i], metric="euclidean"
+        )
+        kmeans_scores[segment_i] = silhouette_score(
+            gradient, kmeans_labels[segment_i], metric="euclidean"
+        )
+        kde_scores[segment_i] = silhouette_score(
+            gradient, kde_labels[segment_i], metric="euclidean"
+        )
+
+    print(np.mean(percent_scores), flush=True)
+    print(percent_scores, flush=True)
+    print(np.mean(kmeans_scores), flush=True)
+    print(kmeans_scores, flush=True)
+    print(np.mean(kde_scores), flush=True)
+    print(kde_scores, flush=True)
+
+    # 2.2. Transform KDE segmented gradient maps to activation maps.
+
+    # resturn grad_maps_z
     return None
 
 
-def gradient_decoding():
+def gradient_decoding(grad_maps):
     """3. Meta-Analytic Functional Decoding: Implement six different decoding strategies and
     perform an optimization test to identify the segment size to split the gradient for each
     strategy.
@@ -188,9 +228,11 @@ if __name__ == "__main__":
     templates_dir = op.join(project_dir, "data", "templates")
     data_dir = op.join(project_dir, "data")
     hcp_gradient_dir = op.join(project_dir, "results", "hcp_gradient")
+    gradient_segmentation_dir = op.join(project_dir, "results", "gradient_segmentation")
 
     # Run Workflow
     # =============
+    # 1. Functional Connectivity Gradient
     principal_gradient_fn = op.join(hcp_gradient_dir, "principal_gradient.npz")
     if not op.isfile(principal_gradient_fn):
         principal_gradient = hcp_gradient(data_dir, templates_dir, hcp_gradient_dir)
@@ -201,7 +243,14 @@ if __name__ == "__main__":
     print(principal_gradient.shape, flush=True)
     print(principal_gradient, flush=True)
 
-    gradient_segmentation()
-    gradient_decoding()
+    # 2. Segmentation and Gradient Maps
+    grad_maps_z = gradient_segmentation(principal_gradient, gradient_segmentation_dir)
+
+    # 3. Meta-Analytic Functional Decoding
+    gradient_decoding(grad_maps_z)
+
+    # 4. Performance of Decoding Strategies
     decoding_performance()
+
+    # 5. Visualization of the Decoded Maps
     decoding_results()
