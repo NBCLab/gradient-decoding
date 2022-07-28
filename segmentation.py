@@ -1,0 +1,370 @@
+"""Extract information from HCP templates."""
+import os.path as op
+import pickle
+from abc import ABCMeta
+
+import numpy as np
+import pandas as pd
+from scipy.signal import argrelextrema
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+from sklearn.neighbors import KernelDensity
+
+import utils
+
+
+class Segmentation(metaclass=ABCMeta):
+    """Base class for segmentation methods."""
+
+    def __init__(self):
+        pass
+
+    def fit(self, gradient):
+        """Fit Segmentation to gradient."""
+        segments, labels, boundaries, peaks = self._fit(gradient)
+
+        # Save results to dictionary file
+        segmentation_dict = {
+            "segments": segments,
+            "labels": labels,
+            "boundaries": boundaries,
+            "peaks": peaks,
+        }
+
+        segmentation_file = open(self.segmentation_fn, "wb")
+        pickle.dump(segmentation_dict, segmentation_file)
+        segmentation_file.close()
+
+        return segmentation_dict
+
+
+class PCTLSegmentation(Segmentation):
+    """Percentile-based segmentation.
+
+    Thi method implements the original method described in (Margulies et al., 2016)
+    in which the whole-brain gradient is segmented into equidistant gradient segments.
+
+    Parameters
+    ----------
+    gradient : numpy.ndarray
+        Gradient vector.
+    n_segments : int
+        Total number of segments.
+    min_n_segments : int
+        Minimum number of segments.
+    """
+
+    def __init__(
+        self,
+        segmentation_fn,
+        n_segments,
+        min_n_segments=3,
+        **kwargs,
+    ):
+        self.segmentation_fn = segmentation_fn
+        self.n_segments = n_segments
+        self.min_n_segments = min_n_segments
+
+    def _fit(self, gradient):
+        """Fit Segmentation to gradient.
+
+         Parameters
+        ----------
+        gradient : numpy.ndarray
+            Gradient vector.
+
+        Returns
+        -------
+        segments : list of numpy.ndarray
+            List with thresholded gradients maps.
+        kde_labels : list of numpy.ndarray
+            Vertices labeled.
+        labels :
+        boundaries :
+        peaks :
+        """
+        segments = []
+        labels = []
+        boundaries = []
+        peaks = []
+        for n_segment in range(self.min_n_segments, self.n_segments + self.min_n_segments):
+            step = 100 / n_segment
+            bins = list(
+                zip(np.linspace(0, 100 - step, n_segment), np.linspace(step, 100, n_segment))
+            )
+
+            gradient_maps = []
+            labels_arr = np.zeros_like(gradient)
+            map_bounds = []
+            map_peaks = []
+            map_bounds.append(gradient.min())
+            for i, bin in enumerate(bins):
+                # Get boundary points
+                min_, max_ = np.percentile(gradient[np.where(gradient)], bin)
+
+                # Threshold gradient map based on bin, but don’t binarize.
+                thresh_arr = gradient.copy()
+                thresh_arr[thresh_arr < min_] = 0
+                thresh_arr[thresh_arr > max_] = 0
+                gradient_maps.append(thresh_arr)
+
+                non_zero_arr = np.where(thresh_arr != 0)
+                labels_arr[non_zero_arr] = i
+                map_bounds.append(max_)
+                # Peak activation = median 50th percentile of the segment
+                map_peaks.append(np.median(thresh_arr[non_zero_arr]))
+
+            segments.append(gradient_maps)
+            labels.append(labels_arr)
+            boundaries.append(map_bounds)
+            peaks.append(map_peaks)
+
+        return segments, labels, boundaries, peaks
+
+
+class KMeansSegmentation(Segmentation):
+    """KMeans-based segmentation.
+
+    This method relied on 1D k-means clustering, which has previously
+    been used to define clusters of functional connectivity matrices
+    to establish a brain-wide parcellation.
+
+    Parameters
+    ----------
+    gradient : numpy.ndarray
+        Gradient vector.
+    n_segments : int
+        Total number of segments.
+    min_n_segments : int
+        Minimum number of segments.
+    """
+
+    def __init__(
+        self,
+        segmentation_fn,
+        n_segments,
+        min_n_segments=3,
+        **kwargs,
+    ):
+        self.segmentation_fn = segmentation_fn
+        self.n_segments = n_segments
+        self.min_n_segments = min_n_segments
+
+    def _fit(self, gradient):
+        """Fit Segmentation to gradient.
+
+         Parameters
+        ----------
+        gradient : numpy.ndarray
+            Gradient vector.
+
+        Returns
+        -------
+        segments : list of numpy.ndarray
+            List with thresholded gradients maps.
+        kde_labels : list of numpy.ndarray
+            Vertices labeled
+        labels :
+        boundaries :
+        peaks :
+        """
+        segments = []
+        labels = []
+        boundaries = []
+        peaks = []
+        for n_segment in range(self.min_n_segments, self.n_segments + self.min_n_segments):
+            kmeans_model = KMeans(
+                n_clusters=n_segment,
+                init="k-means++",
+                n_init=10,
+                random_state=0,
+                algorithm="elkan",
+            ).fit(gradient.reshape(-1, 1))
+
+            gradient_maps = []
+            labels_arr = kmeans_model.labels_
+            map_bounds = []
+            map_bounds.append(gradient.min())
+            for i in range(n_segment):
+                map_arr = np.zeros_like(gradient)
+                map_arr[labels_arr == i] = gradient[labels_arr == i]
+                gradient_maps.append(map_arr)
+
+                map_bounds.append(map_arr.max())
+
+            segments.append(gradient_maps)
+            labels.append(labels_arr)
+            boundaries.append(map_bounds)
+            peaks.append(kmeans_model.cluster_centers_.flatten())
+
+        return segments, labels, boundaries, peaks
+
+
+class KDESegmentation(Segmentation):
+    """KDE-based segmentation.
+
+    This method identifies local minima of a Kernel Density Estimation (KDE)
+    curve of the gradient axis, which are points with minimal numbers of vertices
+    in their vicinity. The number of segments for the KDE method was modified by
+    tuning the width parameter used to generate the KDE curve.
+
+    Parameters
+    ----------
+    gradient : numpy.ndarray
+        Gradient vector.
+    output_dir : str
+    n_segments : int
+        Total number of segments.
+    min_n_segments : int
+        Minimum number of segments. Default is 3.
+    bandwidth : float
+        Initialize bandwidth. Default is 0.25.
+    bw_step : float
+        Step to explore different bandwidths. Default is 0.001.
+    Raises
+    ------
+    ValueError
+        `bandwidth` reach a value less than zero. The algorithm did not
+        converge with the current `bw_step`.
+    """
+
+    def __init__(
+        self,
+        segmentation_fn,
+        n_segments,
+        min_n_segments=3,
+        bandwidth=0.25,
+        bw_step=0.005,
+        **kwargs,
+    ):
+        self.segmentation_fn = segmentation_fn
+        self.n_segments = n_segments
+        self.min_n_segments = min_n_segments
+        self.bandwidth = bandwidth
+        self.bw_step = bw_step
+
+    def _fit(self, gradient):
+        """Fit Segmentation to gradient.
+
+         Parameters
+        ----------
+        gradient : numpy.ndarray
+            Gradient vector.
+
+        Returns
+        -------
+        segments : list of numpy.ndarray
+            List with thresholded gradients maps.
+        kde_labels : list of numpy.ndarray
+            Vertices labeled
+        labels :
+        boundaries :
+        peaks :
+
+        """
+        bandwidth = self.bandwidth
+
+        segments = []
+        labels = []
+        boundaries = []
+        peaks = []
+        bw_used = []
+        for n_segment in range(self.min_n_segments, self.n_segments + self.min_n_segments):
+            n_kde_segments = 0
+            print(n_segment)
+            while n_segment != n_kde_segments:
+                bandwidth -= self.bw_step
+                if bandwidth < 0:
+                    raise ValueError(
+                        f"Bandwidth = {bandwidth} has been reached. "
+                        "Only positive values are allowed for bandwidth."
+                    )
+
+                print(bandwidth)
+                kde = KernelDensity(kernel="gaussian", bandwidth=bandwidth).fit(
+                    gradient.reshape(-1, 1)
+                )
+                x_samples = np.linspace(gradient.min(), gradient.max(), num=gradient.shape[0])
+                y_densities = kde.score_samples(x_samples.reshape(-1, 1))
+
+                min_vals, max_vals = (
+                    argrelextrema(y_densities, np.less)[0],
+                    argrelextrema(y_densities, np.greater)[0],
+                )
+                n_kde_segments = len(max_vals)
+                print(n_segment, n_kde_segments)
+
+            print(f"Found {n_segment} number of segments for bandwidth {bandwidth}")
+            utils.plot_kde_segmentation(
+                n_segment,
+                x_samples,
+                y_densities,
+                min_vals,
+                max_vals,
+                op.dirname(self.segmentation_fn),
+            )
+
+            gradient_maps = []
+            labels_arr = np.zeros_like(gradient)
+            map_bounds = []
+            map_bounds.append(gradient.min())
+            for i in range(n_kde_segments):
+                # Get boundary points
+                if i == 0:
+                    min_ = gradient.min()
+                    max_ = x_samples[min_vals[i]]
+                elif i == n_kde_segments - 1:
+                    min_ = x_samples[min_vals[i - 1]]
+                    max_ = gradient.max()
+                else:
+                    min_ = x_samples[min_vals[i - 1]]
+                    max_ = x_samples[min_vals[i]]
+
+                # Threshold gradient map based on bin, but don’t binarize.
+                thresh_arr = gradient.copy()
+                thresh_arr[thresh_arr < min_] = 0
+                thresh_arr[thresh_arr > max_] = 0
+                gradient_maps.append(thresh_arr)
+
+                labels_arr[np.where(thresh_arr != 0)] = i
+                map_bounds.append(max_)
+
+            segments.append(gradient_maps)
+            labels.append(labels_arr)
+            boundaries.append(map_bounds)
+            peaks.append(x_samples[max_vals])
+            bw_used.append(bandwidth)
+
+        np.save(op.join(op.dirname(self.segmentation_fn), "bandwidth_used.npy"))
+
+        return segments, labels, boundaries, peaks
+
+
+def compare_segmentations(gradient, percent_labels, kmeans_labels, kde_labels, silhouette_df_fn):
+    n_segments = len(percent_labels)
+    segment_sizes = [labels.max() + 1 for labels in percent_labels]
+    silhouette_df = pd.DataFrame(index=segment_sizes)
+    silhouette_df.index.name = "segment_sizes"
+
+    print("Calculating Silhouette measures...")
+    percent_scores = np.zeros(n_segments)
+    kmeans_scores = np.zeros(n_segments)
+    kde_scores = np.zeros(n_segments)
+    for segment_i in range(n_segments):
+        percent_scores[segment_i] = silhouette_score(
+            gradient.reshape(-1, 1), percent_labels[segment_i], metric="euclidean"
+        )
+        kmeans_scores[segment_i] = silhouette_score(
+            gradient.reshape(-1, 1), kmeans_labels[segment_i], metric="euclidean"
+        )
+        kde_scores[segment_i] = silhouette_score(
+            gradient.reshape(-1, 1), kde_labels[segment_i], metric="euclidean"
+        )
+
+    silhouette_df["percentile"] = percent_scores
+    silhouette_df["kmeans"] = kmeans_scores
+    silhouette_df["kde"] = kde_scores
+
+    silhouette_df.to_csv(silhouette_df_fn)
+
+    return silhouette_df
