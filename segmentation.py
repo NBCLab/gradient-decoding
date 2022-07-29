@@ -1,14 +1,20 @@
 """Extract information from HCP templates."""
+import os
 import os.path as op
 import pickle
 from abc import ABCMeta
 
+import nibabel as nib
 import numpy as np
 import pandas as pd
+from nibabel import GiftiImage
+from nibabel.gifti import GiftiDataArray
 from scipy.signal import argrelextrema
+from scipy.stats import zscore
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 from sklearn.neighbors import KernelDensity
+from surfplot.utils import add_fslr_medial_wall
 
 import utils
 
@@ -31,6 +37,7 @@ class Segmentation(metaclass=ABCMeta):
             "peaks": peaks,
         }
 
+        os.makedirs(op.dirname(self.segmentation_fn), exist_ok=True)
         segmentation_file = open(self.segmentation_fn, "wb")
         pickle.dump(segmentation_dict, segmentation_file)
         segmentation_file.close()
@@ -181,8 +188,16 @@ class KMeansSegmentation(Segmentation):
                 algorithm="elkan",
             ).fit(gradient.reshape(-1, 1))
 
+            # Get order mapper from map_peaks
+            map_peaks = kmeans_model.cluster_centers_.flatten()
+            order_idx = np.argsort(map_peaks)
+            order_mapper = np.zeros_like(order_idx)
+            order_mapper[order_idx] = np.arange(n_segment)
+
+            # Reorder labels based on map_peaks order
+            labels_arr = order_mapper[kmeans_model.labels_]
+
             gradient_maps = []
-            labels_arr = kmeans_model.labels_
             map_bounds = []
             map_bounds.append(gradient.min())
             for i in range(n_segment):
@@ -195,7 +210,7 @@ class KMeansSegmentation(Segmentation):
             segments.append(gradient_maps)
             labels.append(labels_arr)
             boundaries.append(map_bounds)
-            peaks.append(kmeans_model.cluster_centers_.flatten())
+            peaks.append(np.sort(map_peaks))
 
         return segments, labels, boundaries, peaks
 
@@ -335,7 +350,8 @@ class KDESegmentation(Segmentation):
             peaks.append(x_samples[max_vals])
             bw_used.append(bandwidth)
 
-        np.save(op.join(op.dirname(self.segmentation_fn), "bandwidth_used.npy"))
+        os.makedirs(op.dirname(self.segmentation_fn), exist_ok=True)
+        np.save(op.join(op.dirname(self.segmentation_fn), "bandwidth_used.npy"), bw_used)
 
         return segments, labels, boundaries, peaks
 
@@ -346,7 +362,6 @@ def compare_segmentations(gradient, percent_labels, kmeans_labels, kde_labels, s
     silhouette_df = pd.DataFrame(index=segment_sizes)
     silhouette_df.index.name = "segment_sizes"
 
-    print("Calculating Silhouette measures...")
     percent_scores = np.zeros(n_segments)
     kmeans_scores = np.zeros(n_segments)
     kde_scores = np.zeros(n_segments)
@@ -367,4 +382,58 @@ def compare_segmentations(gradient, percent_labels, kmeans_labels, kde_labels, s
 
     silhouette_df.to_csv(silhouette_df_fn)
 
-    return silhouette_df
+
+def gradient_to_maps(method, segments, peaks, grad_segment_fn):
+    "Transform segmented gradient maps to normalized activation maps."
+    full_vertices = 64984
+    hemi_vertices = int(full_vertices / 2)
+
+    segment_sizes = [len(segments) for segments in segments]
+    grad_segments_z = []
+    for seg_i, segment in enumerate(segments):
+        grad_maps_z = []
+        for map_i, grad_map in enumerate(segment):
+            # Vertices located above the cluster_centers_ in the segment map
+            # were translated relative to the maximum
+            grad_map_peak = peaks[seg_i][map_i]
+            vrtxs_to_translate = np.where((grad_map > grad_map_peak) & (grad_map != 0))
+            grad_map[vrtxs_to_translate] = grad_map_peak - np.abs(grad_map[vrtxs_to_translate])
+
+            # The resulting segment’s map was standardized into a z-score map
+            # grad_map = abs(grad_map)
+            # grad_map = zscore(grad_map)
+            grad_maps_z.append(grad_map)
+
+            grad_map_full = add_fslr_medial_wall(grad_map, split=False)
+            grad_map_lh, grad_map_rh = grad_map_full[:hemi_vertices], grad_map_full[hemi_vertices:]
+
+            grad_img_lh = GiftiImage()
+            grad_img_rh = GiftiImage()
+            grad_img_lh.add_gifti_data_array(GiftiDataArray(grad_map_lh))
+            grad_img_rh.add_gifti_data_array(GiftiDataArray(grad_map_rh))
+
+            grad_map_lh_fn = op.join(
+                op.dirname(grad_segment_fn),
+                "source-{}{:02d}_desc-{:02d}_space-fsLR_den-32k_hemi-L_feature.func.gii".format(
+                    method, segment_sizes[seg_i], map_i
+                ),
+            )
+            grad_map_rh_fn = op.join(
+                op.dirname(grad_segment_fn),
+                "source-{}{:02d}_desc-{:02d}_space-fsLR_den-32k_hemi-R_feature.func.gii".format(
+                    method, segment_sizes[seg_i], map_i
+                ),
+            )
+            # Write cortical gradient to Gifti files
+            nib.save(grad_img_lh, grad_map_lh_fn)
+            nib.save(grad_img_rh, grad_map_rh_fn)
+
+        grad_segments_z.append(grad_maps_z)
+
+    grad_segments_z_dict = {"grad_segments_z": grad_segments_z}
+
+    grad_segments_z_file = open(grad_segment_fn, "wb")
+    pickle.dump(grad_segments_z_dict, grad_segments_z_file)
+    grad_segments_z_file.close()
+
+    return grad_segments_z_dict
