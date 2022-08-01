@@ -116,8 +116,8 @@ def hcp_gradient(data_dir, template_dir, output_dir):
         new_subcort_img.to_filename(subcort_grads_fn)
 
         # Write cortical gradient to Gifti file
-        nib.save(gradients_lh, gradients_lh_fn)
-        nib.save(gradients_rh, gradients_rh_fn)
+        nib.save(grad_img_lh, gradients_lh_fn)
+        nib.save(grad_img_rh, gradients_rh_fn)
 
     principal_gradient_fn = op.join(hcp_gradient_dir, "principal_gradient.npz")
     principal_gradient = gradients[gradients.shape[0] - n_subcort_vox :, 0]
