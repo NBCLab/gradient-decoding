@@ -8,6 +8,8 @@ import nibabel as nib
 import numpy as np
 from brainspace.gradient import GradientMaps
 from neuromaps.datasets import fetch_annotation, fetch_fslr
+from nibabel import GiftiImage
+from nibabel.gifti import GiftiDataArray
 from nimare.dataset import Dataset
 from nimare.decode.continuous import CorrelationDecoder
 from nimare.extract import download_abstracts, fetch_neuroquery, fetch_neurosynth
@@ -41,6 +43,9 @@ def hcp_gradient(data_dir, template_dir, output_dir):
     -------
     None : :obj:``
     """
+    full_vertices = 64984
+    hemi_vertices = int(full_vertices / 2)
+
     print("Reading connenctivity matrix and apply Fisher's z-to-r transform...", flush=True)
     dcon_img = nib.load(
         op.join(data_dir, "hcp", "HCP_S1200_1003_rfMRI_MSMAll_groupPCA_d4500ROW_zcorr.dconn.nii")
@@ -79,7 +84,13 @@ def hcp_gradient(data_dir, template_dir, output_dir):
 
         # Add the medial wall: 32,492 X 32,492 grayordinates = 64,984, for visualization purposes
         # Get left and rigth hemisphere gradient scores, and insert 0's where medial wall is
-        gradients_lh, gradients_rh = add_fslr_medial_wall(gradients, split=True)
+        grad_map_full = add_fslr_medial_wall(gradients, split=False)
+        gradients_lh, gradients_rh = grad_map_full[:hemi_vertices], grad_map_full[hemi_vertices:]
+
+        grad_img_lh = GiftiImage()
+        grad_img_rh = GiftiImage()
+        grad_img_lh.add_gifti_data_array(GiftiDataArray(gradients_lh))
+        grad_img_rh.add_gifti_data_array(GiftiDataArray(gradients_rh))
 
         subcort_grads_fn = op.join(
             output_dir,
