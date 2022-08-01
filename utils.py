@@ -4,6 +4,7 @@ import os.path as op
 import numpy as np
 from matplotlib import pyplot as plt
 from matplotlib.collections import LineCollection
+from sklearn.metrics import pairwise_distances
 
 
 def rm_fslr_medial_wall(data_lh, data_rh, wall_lh, wall_rh, join=True):
@@ -44,6 +45,21 @@ def rm_fslr_medial_wall(data_lh, data_rh, wall_lh, wall_rh, join=True):
         return data
     else:
         return data_lh, data_rh
+
+
+def affinity(matrix, sparsity):
+    # Generate percentile thresholds for 90th percentile
+    perc = np.array([np.percentile(x, sparsity) for x in matrix])
+
+    # Threshold each row of the matrix by setting values below 90th percentile to 0
+    for i in range(matrix.shape[0]):
+        matrix[i, matrix[i, :] < perc[i]] = 0
+    matrix[matrix < 0] = 0
+
+    # Now we are dealing with sparse vectors. Cosine similarity is used as affinity metric
+    matrix = 1 - pairwise_distances(matrix, metric="cosine")
+
+    return matrix
 
 
 def plot_dm_results(lambdas, output_dir):

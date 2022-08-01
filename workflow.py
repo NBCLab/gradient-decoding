@@ -4,6 +4,7 @@ import os
 import os.path as op
 import pickle
 
+import mapalign
 import nibabel as nib
 import numpy as np
 from brainspace.gradient import GradientMaps
@@ -56,12 +57,14 @@ def hcp_gradient(data_dir, template_dir, output_dir):
     del dcon_img
 
     print("Applying diffusion map embedding...", flush=True)
-    gm = GradientMaps(n_components=10, random_state=0, kernel="cosine", approach="dm")
-    gm.fit(dcon_mtx, sparsity=0.9, n_iter=10)
-    lambdas = gm.lambdas_
-    gradients = gm.gradients_
-    pickle.dump(lambdas, open(op.join(output_dir, "lambdas_temp.p"), "wb"))
-    pickle.dump(gradients, open(op.join(output_dir, "gradients_temp.p"), "wb"))
+    # Calculate affinity matrix
+    dcon_mtx = utils.affinity(dcon_mtx, 90)
+
+    gradients, lambdas = mapalign.embed.compute_diffusion_map(
+        dcon_mtx, alpha=0.5, return_result=True, overwrite=True
+    )
+    pickle.dump(lambdas, open(op.join(output_dir, "lambdas.p"), "wb"))
+    pickle.dump(gradients, open(op.join(output_dir, "gradients.p"), "wb"))
 
     utils.plot_dm_results(lambdas, output_dir)
 
