@@ -28,7 +28,7 @@ from segmentation import (
 )
 
 
-def hcp_gradient(data_dir, template_dir, output_dir):
+def hcp_gradient(data_dir, template_dir, principal_gradient_fn, pypackage="mapalign"):
     """1. Functional Connectivity Gradient: Perform gradient decomposition of the group-average
     dense connectome from HCP resting-state fMRI data.
 
@@ -46,29 +46,41 @@ def hcp_gradient(data_dir, template_dir, output_dir):
     """
     full_vertices = 64984
     hemi_vertices = int(full_vertices / 2)
+    output_dir = op.dirname(principal_gradient_fn)
 
-    print("Reading connenctivity matrix and apply Fisher's z-to-r transform...", flush=True)
+    print("Loading connenctivity matrix and applying Fisher's z-to-r transform...", flush=True)
     dcon_img = nib.load(
         op.join(data_dir, "hcp", "HCP_S1200_1003_rfMRI_MSMAll_groupPCA_d4500ROW_zcorr.dconn.nii")
     )
     dcon_mtx = np.tanh(dcon_img.get_fdata())  # 91,282 X 91,282 grayordinates
-    dcon_mtx = dcon_mtx.astype("float32")
 
     del dcon_img
 
-    print("Applying diffusion map embedding...", flush=True)
-    # Calculate affinity matrix
-    dcon_mtx = utils.affinity(dcon_mtx, 90)
+    gradients_fn = op.join(output_dir, "gradients.npz")
+    lambdas_fn = op.join(output_dir, "lambdas.npz")
+    if not (op.isfile(gradients_fn) and op.isfile(lambdas_fn)):
+        print("Applying diffusion map embedding...", flush=True)
+        if pypackage == "mapalign":
+            # Calculate affinity matrix
+            dcon_mtx = utils.affinity(dcon_mtx, 90)
+            gradients, lambdas = mapalign.embed.compute_diffusion_map(
+                dcon_mtx, alpha=0.5, return_result=True, overwrite=True
+            )
+        elif pypackage == "brainspace":
+            gm = GradientMaps(n_components=10, random_state=0, kernel="cosine", approach="dm")
+            gm.fit(dcon_mtx, sparsity=0.9, n_iter=10)
+            gradients, lambdas = gm.gradients_, gm.lambdas_
 
-    gradients, lambdas = mapalign.embed.compute_diffusion_map(
-        dcon_mtx, alpha=0.5, return_result=True, overwrite=True
-    )
-    pickle.dump(lambdas, open(op.join(output_dir, "lambdas.p"), "wb"))
-    pickle.dump(gradients, open(op.join(output_dir, "gradients.p"), "wb"))
-
-    utils.plot_dm_results(lambdas, output_dir)
+        np.savez(gradients_fn, gradients)
+        np.savez(lambdas_fn, lambdas)
+    else:
+        print("Loading diffusion map embedding...", flush=True)
+        gradients = np.load(gradients_fn)
+        lambdas = np.load(lambdas_fn)
 
     del dcon_mtx
+
+    utils.plot_dm_results(lambdas, output_dir)
 
     print("Exporting gradient to nii and gii files...", flush=True)
     # Load subcortical volume
@@ -122,7 +134,6 @@ def hcp_gradient(data_dir, template_dir, output_dir):
         nib.save(grad_img_lh, gradients_lh_fn)
         nib.save(grad_img_rh, gradients_rh_fn)
 
-    principal_gradient_fn = op.join(hcp_gradient_dir, "principal_gradient.npz")
     principal_gradient = gradients[gradients.shape[0] - n_subcort_vox :, 0]
     np.savez(principal_gradient_fn, principal_gradient)
 
@@ -291,7 +302,7 @@ def gradient_decoding(data_dir):
                     version="1",
                     overwrite=False,
                     source="combined",
-                    vocab="neuroquery7547",
+                    vocab="neuroquery6308",
                     type="tfidf",
                 )
 
@@ -319,6 +330,7 @@ def gradient_decoding(data_dir):
             if "title_keywords_abstract_body" in dset.texts:
                 print("Dataset contains title_keywords_abstract_body")
             else:
+                # In progress...
                 print("Downloading title_keywords_abstract_body to dset")
                 # dset = download_abstracts(dset, "jpera054@fiu.edu")
                 # dset.save(dset_fn)
@@ -328,10 +340,7 @@ def gradient_decoding(data_dir):
             os.makedirs(basepath_path, exist_ok=True)
             dset.update_path(basepath_path)
 
-        print(dset.texts)
-        # print(dset.texts["abstract"])
         # Term-based meta-analysis
-        """
         print("Performing term-based meta-analysis...")
         term_based_decoder_fn = os.path.join(output_dir, f"term-based_{dataset}_decoder.pkl.gz")
         if not op.isfile(term_based_decoder_fn):
@@ -346,10 +355,9 @@ def gradient_decoding(data_dir):
         else:
             decoder_file = gzip.open(term_based_decoder_fn, "rb")
             decoder = pickle.load(decoder_file)
-    
+
         term_based_meta_maps = decoder.images_
         print(term_based_meta_maps)
-        """
 
     return None
 
@@ -395,8 +403,8 @@ def decoding_results():
 if __name__ == "__main__":
     # Define Paths
     # =============
-    # project_dir = "/home/data/nbc/misc-projects/Peraza_GradientDecoding"
-    project_dir = "/Users/jperaza/Documents/GitHub/gradient-decoding"
+    project_dir = "/home/data/nbc/misc-projects/Peraza_GradientDecoding"
+    # project_dir = "/Users/jperaza/Documents/GitHub/gradient-decoding"
     templates_dir = op.join(project_dir, "data", "templates")
     data_dir = op.join(project_dir, "data")
     hcp_gradient_dir = op.join(project_dir, "results", "hcp_gradient")
@@ -407,9 +415,9 @@ if __name__ == "__main__":
     # 1. Functional Connectivity Gradient
     principal_gradient_fn = op.join(hcp_gradient_dir, "principal_gradient.npz")
     if not op.isfile(principal_gradient_fn):
-        principal_gradient = hcp_gradient(data_dir, templates_dir, hcp_gradient_dir)
+        principal_gradient = hcp_gradient(data_dir, templates_dir, principal_gradient_fn)
     else:
-        print("Gradient dictionary file exists. Loading dictionary...", flush=True)
+        print("Gradient file exists. Loading principal gradient...", flush=True)
         principal_gradient = np.load(principal_gradient_fn)
 
     print(principal_gradient.shape, flush=True)
@@ -418,15 +426,15 @@ if __name__ == "__main__":
     # 2. Segmentation and Gradient Maps
     # grad_maps_z_fn = op.join(gradient_segmentation_dir, "grad_maps_z.npy")
     # if not op.isfile(grad_maps_z_fn):
-    gradient_segmentation(principal_gradient, gradient_segmentation_dir)
+    # gradient_segmentation(principal_gradient, gradient_segmentation_dir)
     # else:
     #    grad_maps_z = np.load(grad_maps_z_fn)
 
     # 3. Meta-Analytic Functional Decoding
-    gradient_decoding(data_dir)
+    # gradient_decoding(data_dir)
 
     # 4. Performance of Decoding Strategies
-    decoding_performance()
+    # decoding_performance()
 
     # 5. Visualization of the Decoded Maps
-    decoding_results()
+    # decoding_results()
