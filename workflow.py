@@ -9,7 +9,6 @@ import mapalign
 import nibabel as nib
 import numpy as np
 from brainspace.gradient import GradientMaps
-from neuromaps.datasets import fetch_annotation, fetch_fslr
 from nibabel import GiftiImage
 from nibabel.gifti import GiftiDataArray
 from nimare.dataset import Dataset
@@ -394,10 +393,15 @@ def decoding_results():
 def main(project_dir, n_cores):
     # Define Paths
     # =============
-    templates_dir = op.join(project_dir, "data", "templates")
+    n_cores = int(n_cores)
+    project_dir = op.abspath(project_dir)
     data_dir = op.join(project_dir, "data")
+    templates_dir = op.join(project_dir, "data", "templates")
     hcp_gradient_dir = op.join(project_dir, "results", "hcp_gradient")
     gradient_segmentation_dir = op.join(project_dir, "results", "gradient_segmentation")
+    # gradient_decoding_dir = op.join(project_dir, "results", "gradient_decoding")
+    # decoding_performance_dir = op.join(project_dir, "results", "decoding_performance")
+    # decoding_results_dir = op.join(project_dir, "results", "decoding_results")
 
     # Run Workflow
     # =============
@@ -425,14 +429,17 @@ def main(project_dir, n_cores):
     kde_grad_segments = grad_seg_dict["kde_grad_segments"]
 
     # 3. Meta-Analytic Functional Decoding
-    gradient_decoding(
-        data_dir, percent_grad_segments, kmeans_grad_segments, kde_grad_segments, n_cores
-    )
+    # print("3. Meta-Analytic Functional Decoding", flush=True)
+    # gradient_decoding(
+    #     data_dir, percent_grad_segments, kmeans_grad_segments, kde_grad_segments, n_cores
+    # )
 
     # 4. Performance of Decoding Strategies
+    # print("4. Performance of Decoding Strategies", flush=True)
     # decoding_performance()
 
     # 5. Visualization of the Decoded Maps
+    # print("5. Visualization of the Decoded Maps", flush=True)
     # decoding_results()
 
 
