@@ -2,8 +2,8 @@
 #SBATCH --job-name=workflow
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem-per-cpu=20gb
+#SBATCH --cpus-per-task=3
+#SBATCH --mem-per-cpu=40gb
 #SBATCH --account=iacc_nbc
 #SBATCH --qos=pq_nbc
 #SBATCH --partition=IB_40C_512G
@@ -24,7 +24,9 @@ set -e
 PROJECT_DIR="/home/data/nbc/misc-projects/Peraza_GradientDecoding"
 
 # Setup done, run the command
-cmd="python ${PROJECT_DIR}/workflow.py"
+cmd="python ${PROJECT_DIR}/workflow.py \
+    --project_dir ${PROJECT_DIR} \
+    --n_cores ${SLURM_CPUS_PER_TASK}"
 echo Commandline: $cmd
 eval $cmd
 

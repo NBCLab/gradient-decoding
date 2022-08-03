@@ -1,4 +1,5 @@
 """Workflow for running the grdient-decoding analyses"""
+import argparse
 import gzip
 import os
 import os.path as op
@@ -26,6 +27,24 @@ from segmentation import (
     compare_segmentations,
     gradient_to_maps,
 )
+
+
+def _get_parser():
+    parser = argparse.ArgumentParser(description="Run gradient-decoding workflow")
+    parser.add_argument(
+        "--project_dir",
+        dest="project_dir",
+        required=True,
+        help="Path to project directory",
+    )
+    parser.add_argument(
+        "--n_cores",
+        dest="n_cores",
+        default=4,
+        required=False,
+        help="CPUs",
+    )
+    return parser
 
 
 def hcp_gradient(data_dir, template_dir, principal_gradient_fn, pypackage="mapalign"):
@@ -229,7 +248,9 @@ def gradient_segmentation(gradient, grad_seg_fn):
     return grad_seg_dict
 
 
-def gradient_decoding(data_dir):
+def gradient_decoding(
+    data_dir, percent_grad_segments, kmeans_grad_segments, kde_grad_segments, n_cores
+):
     """3. Meta-Analytic Functional Decoding: Implement six different decoding strategies and
     perform an optimization test to identify the segment size to split the gradient for each
     strategy.
@@ -314,6 +335,7 @@ def gradient_decoding(data_dir):
                 meta_estimator=mkda.MKDAChi2,
                 feature_group=feature_group,
                 target_image="z_desc-specificity",
+                n_cores=n_cores,
             )
             decoder.fit(dset)
             decoder.save(term_based_decoder_fn, compress=True)
@@ -369,11 +391,9 @@ def decoding_results():
     return None
 
 
-if __name__ == "__main__":
+def main(project_dir, n_cores):
     # Define Paths
     # =============
-    # project_dir = "/home/data/nbc/misc-projects/Peraza_GradientDecoding"
-    project_dir = "/Users/jperaza/Documents/GitHub/gradient-decoding"
     templates_dir = op.join(project_dir, "data", "templates")
     data_dir = op.join(project_dir, "data")
     hcp_gradient_dir = op.join(project_dir, "results", "hcp_gradient")
@@ -405,10 +425,22 @@ if __name__ == "__main__":
     kde_grad_segments = grad_seg_dict["kde_grad_segments"]
 
     # 3. Meta-Analytic Functional Decoding
-    # gradient_decoding(percent_grad_segments, kmeans_grad_segments, kde_grad_segments)
+    gradient_decoding(
+        data_dir, percent_grad_segments, kmeans_grad_segments, kde_grad_segments, n_cores
+    )
 
     # 4. Performance of Decoding Strategies
     # decoding_performance()
 
     # 5. Visualization of the Decoded Maps
     # decoding_results()
+
+
+def _main(argv=None):
+    option = _get_parser().parse_args(argv)
+    kwargs = vars(option)
+    main(**kwargs)
+
+
+if __name__ == "__main__":
+    _main()
