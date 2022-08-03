@@ -47,18 +47,21 @@ def hcp_gradient(data_dir, template_dir, principal_gradient_fn, pypackage="mapal
     full_vertices = 64984
     hemi_vertices = int(full_vertices / 2)
     output_dir = op.dirname(principal_gradient_fn)
+    os.makedirs(output_dir, exist_ok=True)
 
-    print("Loading connenctivity matrix and applying Fisher's z-to-r transform...", flush=True)
-    dcon_img = nib.load(
-        op.join(data_dir, "hcp", "HCP_S1200_1003_rfMRI_MSMAll_groupPCA_d4500ROW_zcorr.dconn.nii")
-    )
-    dcon_mtx = np.tanh(dcon_img.get_fdata())  # 91,282 X 91,282 grayordinates
-
-    del dcon_img
-
-    gradients_fn = op.join(output_dir, "gradients.npz")
-    lambdas_fn = op.join(output_dir, "lambdas.npz")
+    gradients_fn = op.join(output_dir, "gradients.npy")
+    lambdas_fn = op.join(output_dir, "lambdas.npy")
     if not (op.isfile(gradients_fn) and op.isfile(lambdas_fn)):
+        print("Loading connenctivity matrix and applying Fisher's z-to-r transform...", flush=True)
+        dcon_img = nib.load(
+            op.join(
+                data_dir, "hcp", "HCP_S1200_1003_rfMRI_MSMAll_groupPCA_d4500ROW_zcorr.dconn.nii"
+            )
+        )
+        dcon_mtx = np.tanh(dcon_img.get_fdata())  # 91,282 X 91,282 grayordinates
+
+        del dcon_img
+
         print("Applying diffusion map embedding...", flush=True)
         if pypackage == "mapalign":
             # Calculate affinity matrix
@@ -73,14 +76,14 @@ def hcp_gradient(data_dir, template_dir, principal_gradient_fn, pypackage="mapal
             gm.fit(dcon_mtx, sparsity=0.9, n_iter=10)
             gradients, lambdas = gm.gradients_, gm.lambdas_
 
-        np.savez(gradients_fn, gradients)
-        np.savez(lambdas_fn, lambdas)
+        del dcon_mtx
+
+        np.save(gradients_fn, gradients)
+        np.save(lambdas_fn, lambdas)
     else:
         print("Loading diffusion map embedding...", flush=True)
         gradients = np.load(gradients_fn)
         lambdas = np.load(lambdas_fn)
-
-    del dcon_mtx
 
     utils.plot_dm_results(lambdas, output_dir)
 
@@ -89,19 +92,26 @@ def hcp_gradient(data_dir, template_dir, principal_gradient_fn, pypackage="mapal
     subcortical_fn = op.join(template_dir, "rois-subcortical_mni152_mask.nii.gz")
     subcort_img = nib.load(subcortical_fn)
     subcort_dat = subcort_img.get_fdata()
-    subcort_dat_idxs = np.nonzero(subcort_dat)[0]
-    n_subcort_vox = len(subcort_dat_idxs)
+    subcort_mask = subcort_dat != 0
+    n_subcort_vox = np.where(subcort_mask)[0].shape[0]
+    print(gradients.shape)
+    print(gradients)
 
     n_gradients = gradients.shape[1]
     for i in range(n_gradients):
         # Exclude 31,870 voxels form subcortical structures as represented in volumetric space
         # = 59,412 excluding the medial wall
         subcort_grads = gradients[gradients.shape[0] - n_subcort_vox :, i]
-        gradients = gradients[: gradients.shape[0] - n_subcort_vox, i]
+        cort_grads = gradients[: gradients.shape[0] - n_subcort_vox, i]
+
+        if i == 0:
+            # Save principal gradient
+            principal_gradient = cort_grads.copy()
+            np.save(principal_gradient_fn, principal_gradient)
 
         # Add the medial wall: 32,492 X 32,492 grayordinates = 64,984, for visualization purposes
         # Get left and rigth hemisphere gradient scores, and insert 0's where medial wall is
-        grad_map_full = add_fslr_medial_wall(gradients, split=False)
+        grad_map_full = add_fslr_medial_wall(cort_grads, split=False)
         gradients_lh, gradients_rh = grad_map_full[:hemi_vertices], grad_map_full[hemi_vertices:]
 
         grad_img_lh = GiftiImage()
@@ -128,16 +138,13 @@ def hcp_gradient(data_dir, template_dir, principal_gradient_fn, pypackage="mapal
 
         # Write subcortical gradient to Nifti file
         new_subcort_dat = np.zeros_like(subcort_dat)
-        new_subcort_dat[subcort_dat_idxs] = subcort_grads
+        new_subcort_dat[subcort_mask] = subcort_grads
         new_subcort_img = nib.Nifti1Image(new_subcort_dat, subcort_img.affine, subcort_img.header)
         new_subcort_img.to_filename(subcort_grads_fn)
 
         # Write cortical gradient to Gifti file
         nib.save(grad_img_lh, gradients_lh_fn)
         nib.save(grad_img_rh, gradients_rh_fn)
-
-    principal_gradient = gradients[gradients.shape[0] - n_subcort_vox :, 0]
-    np.savez(principal_gradient_fn, principal_gradient)
 
     return principal_gradient
 
@@ -419,15 +426,12 @@ if __name__ == "__main__":
     # Run Workflow
     # =============
     # 1. Functional Connectivity Gradient
-    principal_gradient_fn = op.join(hcp_gradient_dir, "principal_gradient.npz")
+    principal_gradient_fn = op.join(hcp_gradient_dir, "principal_gradient.npy")
     if not op.isfile(principal_gradient_fn):
         principal_gradient = hcp_gradient(data_dir, templates_dir, principal_gradient_fn)
     else:
         print("Gradient file exists. Loading principal gradient...", flush=True)
         principal_gradient = np.load(principal_gradient_fn)
-
-    print(principal_gradient.shape, flush=True)
-    print(principal_gradient, flush=True)
 
     # 2. Segmentation and Gradient Maps
     # grad_maps_z_fn = op.join(gradient_segmentation_dir, "grad_maps_z.npy")
