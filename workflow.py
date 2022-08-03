@@ -63,9 +63,11 @@ def hcp_gradient(data_dir, template_dir, principal_gradient_fn, pypackage="mapal
         if pypackage == "mapalign":
             # Calculate affinity matrix
             dcon_mtx = utils.affinity(dcon_mtx, 90)
-            gradients, lambdas = mapalign.embed.compute_diffusion_map(
+            gradients, statistics = mapalign.embed.compute_diffusion_map(
                 dcon_mtx, alpha=0.5, return_result=True, overwrite=True
             )
+            pickle.dump(statistics, open(op.join(output_dir, "statistics.p"), "wb"))
+            lambdas = statistics["lambdas"]
         elif pypackage == "brainspace":
             gm = GradientMaps(n_components=10, random_state=0, kernel="cosine", approach="dm")
             gm.fit(dcon_mtx, sparsity=0.9, n_iter=10)
@@ -327,13 +329,8 @@ def gradient_decoding(data_dir):
                 dset = download_abstracts(dset, "jpera054@fiu.edu")
                 dset.save(dset_fn)
         elif dataset == "neuroquery":
-            if "title_keywords_abstract_body" in dset.texts:
-                print("Dataset contains title_keywords_abstract_body")
-            else:
-                # In progress...
-                print("Downloading title_keywords_abstract_body to dset")
-                # dset = download_abstracts(dset, "jpera054@fiu.edu")
-                # dset.save(dset_fn)
+            # LDA model will be run on word_counts, so the text is not needed
+            pass
 
         if dset.basepath is None:
             basepath_path = os.path.join(output_dir, f"{dataset}_basepath")
@@ -342,12 +339,17 @@ def gradient_decoding(data_dir):
 
         # Term-based meta-analysis
         print("Performing term-based meta-analysis...")
+        if dataset == "neurosynth":
+            feature_group = "terms_abstract_tfidf"
+        elif dataset == "neuroquery":
+            feature_group = "neuroquery6308_combined_tfidf"
+
         term_based_decoder_fn = os.path.join(output_dir, f"term-based_{dataset}_decoder.pkl.gz")
         if not op.isfile(term_based_decoder_fn):
             decoder = CorrelationDecoder(
                 frequency_threshold=0.001,
                 meta_estimator=mkda.MKDAChi2,
-                feature_group="terms_abstract_tfidf",
+                feature_group=feature_group,
                 target_image="z_desc-specificity",
             )
             decoder.fit(dset)
@@ -358,6 +360,10 @@ def gradient_decoding(data_dir):
 
         term_based_meta_maps = decoder.images_
         print(term_based_meta_maps)
+
+        # LDA-based meta-analysis
+
+        # GCLDA-based meta-analysis
 
     return None
 
