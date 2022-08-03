@@ -399,6 +399,11 @@ def gradient_to_maps(method, segments, peaks, grad_seg_dict, output_dir):
             vrtxs_to_translate = np.where((grad_map > grad_map_peak) & (grad_map != 0))
             grad_map[vrtxs_to_translate] = grad_map_peak - np.abs(grad_map[vrtxs_to_translate])
 
+            # Translate relative to zero
+            grad_map_min = grad_map.min()
+            vrtxs_non_zero = np.where(grad_map != 0)
+            grad_map[vrtxs_non_zero] = np.abs(grad_map_min) + grad_map[vrtxs_non_zero]
+
             # The resulting segment’s map was standardized into a z-score map
             # grad_map = abs(grad_map)
             # grad_map = zscore(grad_map)
