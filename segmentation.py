@@ -233,7 +233,7 @@ class KDESegmentation(Segmentation):
     min_n_segments : int
         Minimum number of segments. Default is 3.
     bandwidth : float
-        Initialize bandwidth. Default is 0.25.
+        Initialize bandwidth. Default is 0.26.
     bw_step : float
         Step to explore different bandwidths. Default is 0.001.
     Raises
@@ -248,7 +248,7 @@ class KDESegmentation(Segmentation):
         segmentation_fn,
         n_segments,
         min_n_segments=3,
-        bandwidth=0.25,
+        bandwidth=0.26,
         bw_step=0.005,
         **kwargs,
     ):
@@ -383,15 +383,15 @@ def compare_segmentations(gradient, percent_labels, kmeans_labels, kde_labels, s
     silhouette_df.to_csv(silhouette_df_fn)
 
 
-def gradient_to_maps(method, segments, peaks, grad_segment_fn):
+def gradient_to_maps(method, segments, peaks, grad_seg_dict, output_dir):
     "Transform segmented gradient maps to normalized activation maps."
     full_vertices = 64984
     hemi_vertices = int(full_vertices / 2)
 
     segment_sizes = [len(segments) for segments in segments]
-    grad_segments_z = []
+    grad_segments = []
     for seg_i, segment in enumerate(segments):
-        grad_maps_z = []
+        grad_maps = []
         for map_i, grad_map in enumerate(segment):
             # Vertices located above the cluster_centers_ in the segment map
             # were translated relative to the maximum
@@ -402,7 +402,7 @@ def gradient_to_maps(method, segments, peaks, grad_segment_fn):
             # The resulting segment’s map was standardized into a z-score map
             # grad_map = abs(grad_map)
             # grad_map = zscore(grad_map)
-            grad_maps_z.append(grad_map)
+            grad_maps.append(grad_map)
 
             grad_map_full = add_fslr_medial_wall(grad_map, split=False)
             grad_map_lh, grad_map_rh = grad_map_full[:hemi_vertices], grad_map_full[hemi_vertices:]
@@ -413,13 +413,13 @@ def gradient_to_maps(method, segments, peaks, grad_segment_fn):
             grad_img_rh.add_gifti_data_array(GiftiDataArray(grad_map_rh))
 
             grad_map_lh_fn = op.join(
-                op.dirname(grad_segment_fn),
+                output_dir,
                 "source-{}{:02d}_desc-{:02d}_space-fsLR_den-32k_hemi-L_feature.func.gii".format(
                     method, segment_sizes[seg_i], map_i
                 ),
             )
             grad_map_rh_fn = op.join(
-                op.dirname(grad_segment_fn),
+                output_dir,
                 "source-{}{:02d}_desc-{:02d}_space-fsLR_den-32k_hemi-R_feature.func.gii".format(
                     method, segment_sizes[seg_i], map_i
                 ),
@@ -428,12 +428,8 @@ def gradient_to_maps(method, segments, peaks, grad_segment_fn):
             nib.save(grad_img_lh, grad_map_lh_fn)
             nib.save(grad_img_rh, grad_map_rh_fn)
 
-        grad_segments_z.append(grad_maps_z)
+        grad_segments.append(grad_maps)
 
-    grad_segments_z_dict = {"grad_segments_z": grad_segments_z}
+    grad_seg_dict[f"{method.lower()}_grad_segments"] = grad_segments
 
-    grad_segments_z_file = open(grad_segment_fn, "wb")
-    pickle.dump(grad_segments_z_dict, grad_segments_z_file)
-    grad_segments_z_file.close()
-
-    return grad_segments_z_dict
+    return grad_seg_dict

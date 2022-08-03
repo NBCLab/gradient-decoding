@@ -52,7 +52,7 @@ def hcp_gradient(data_dir, template_dir, principal_gradient_fn, pypackage="mapal
     gradients_fn = op.join(output_dir, "gradients.npy")
     lambdas_fn = op.join(output_dir, "lambdas.npy")
     if not (op.isfile(gradients_fn) and op.isfile(lambdas_fn)):
-        print("Loading connenctivity matrix and applying Fisher's z-to-r transform...", flush=True)
+        print("\t\tLoading connenctivity mtx and apply Fisher's z-to-r transform...", flush=True)
         dcon_img = nib.load(
             op.join(
                 data_dir, "hcp", "HCP_S1200_1003_rfMRI_MSMAll_groupPCA_d4500ROW_zcorr.dconn.nii"
@@ -62,7 +62,7 @@ def hcp_gradient(data_dir, template_dir, principal_gradient_fn, pypackage="mapal
 
         del dcon_img
 
-        print("Applying diffusion map embedding...", flush=True)
+        print("\t\tApplying diffusion map embedding...", flush=True)
         if pypackage == "mapalign":
             # Calculate affinity matrix
             dcon_mtx = utils.affinity(dcon_mtx, 90)
@@ -81,21 +81,19 @@ def hcp_gradient(data_dir, template_dir, principal_gradient_fn, pypackage="mapal
         np.save(gradients_fn, gradients)
         np.save(lambdas_fn, lambdas)
     else:
-        print("Loading diffusion map embedding...", flush=True)
+        print("\t\tLoading diffusion map embedding...", flush=True)
         gradients = np.load(gradients_fn)
         lambdas = np.load(lambdas_fn)
 
     utils.plot_dm_results(lambdas, output_dir)
 
-    print("Exporting gradient to nii and gii files...", flush=True)
+    print("\t\tExporting gradient to NIFTI and GIFTI files...", flush=True)
     # Load subcortical volume
     subcortical_fn = op.join(template_dir, "rois-subcortical_mni152_mask.nii.gz")
     subcort_img = nib.load(subcortical_fn)
     subcort_dat = subcort_img.get_fdata()
     subcort_mask = subcort_dat != 0
     n_subcort_vox = np.where(subcort_mask)[0].shape[0]
-    print(gradients.shape)
-    print(gradients)
 
     n_gradients = gradients.shape[1]
     for i in range(n_gradients):
@@ -149,7 +147,7 @@ def hcp_gradient(data_dir, template_dir, principal_gradient_fn, pypackage="mapal
     return principal_gradient
 
 
-def gradient_segmentation(gradient, output_dir):
+def gradient_segmentation(gradient, grad_seg_fn):
     """2. Segmentation and Gradient Maps: Evaluate three different segmentation approaches to
     split the gradient spectrum into a finite number of brain maps.
 
@@ -167,110 +165,68 @@ def gradient_segmentation(gradient, output_dir):
     -------
     None : :obj:``
     """
-    # 2.1. Segment the gradient into k ≥ 3 segments.
+    print("\t2.1. Segment the gradient into k ≥ 3 segments.", flush=True)
     n_segments = 5
+    grad_seg_dict = {}
+    output_dir = op.dirname(grad_seg_fn)
 
-    # Percentile Segmentation
-    print("Running Percentile Segmentation...")
-    percent_fn = op.join(output_dir, "percentile", "percentile_results.pkl")
-    if not op.isfile(percent_fn):
-        pctl_method = PCTLSegmentation(percent_fn, n_segments)
-        percent_dict = pctl_method.fit(gradient)
-    else:
-        percent_file = open(percent_fn, "rb")
-        percent_dict = pickle.load(percent_file)
-        percent_file.close()
+    for method in ["Percentile", "KMeans", "KDE"]:
+        spc_output_dir = op.join(output_dir, method.lower())
+        results_fn = op.join(spc_output_dir, f"{method.lower()}_results.pkl")
+        if not op.isfile(results_fn):
+            if method == "Percentile":
+                # Percentile Segmentation
+                print("\t\tRunning Percentile Segmentation...", flush=True)
+                segment_method = PCTLSegmentation(results_fn, n_segments)
+            elif method == "KMeans":
+                # K-Means
+                print("\t\tRunning K-Means Segmentation...", flush=True)
+                segment_method = KMeansSegmentation(results_fn, n_segments)
+            elif method == "KDE":
+                # KDE
+                print("\t\tRunning KDE Segmentation...", flush=True)
+                segment_method = KDESegmentation(results_fn, n_segments)
 
-    percent_segments, percent_labels, percent_peaks = (
-        percent_dict["segments"],
-        percent_dict["labels"],
-        percent_dict["peaks"],
-    )
+            results_dict = segment_method.fit(gradient)
+        else:
+            print(f"\t\tLoading Results from {method} Segmentation...", flush=True)
+            results_file = open(results_fn, "rb")
+            results_dict = pickle.load(results_file)
+            results_file.close()
 
-    # K-Means
-    print("Running K-Means Segmentation...")
-    kmeans_fn = op.join(output_dir, "kmeans", "kmeans_results.pkl")
-    if not op.isfile(kmeans_fn):
-        kmeans_method = KMeansSegmentation(kmeans_fn, n_segments)
-        kmeans_dict = kmeans_method.fit(gradient)
-    else:
-        kmeans_file = open(kmeans_fn, "rb")
-        kmeans_dict = pickle.load(kmeans_file)
-        kmeans_file.close()
+        segments, labels, peaks = (
+            results_dict["segments"],
+            results_dict["labels"],
+            results_dict["peaks"],
+        )
+        assert len(labels) == n_segments
 
-    kmeans_segments, kmeans_labels, kmeans_peaks = (
-        kmeans_dict["segments"],
-        kmeans_dict["labels"],
-        kmeans_dict["peaks"],
-    )
+        # Save labels to calculate silhouette measures
+        if method == "Percentile":
+            percent_labels = labels.copy()
+        elif method == "KMeans":
+            kmeans_labels = labels.copy()
+        elif method == "KDE":
+            kde_labels = labels.copy()
 
-    # KDE
-    print("Running KDE Segmentation...")
-    kde_fn = op.join(output_dir, "kde", "kde_results.pkl")
-    if not op.isfile(kde_fn):
-        kde_method = KDESegmentation(kde_fn, n_segments)
-        kde_dict = kde_method.fit(gradient)
-    else:
-        kde_file = open(kde_fn, "rb")
-        kde_dict = pickle.load(kde_file)
-        kde_file.close()
+        # 2.2. Transform KDE segmented gradient maps to activation maps.
+        print(f"\t\tTransforming {method} segmented grad maps to activation maps...", flush=True)
+        grad_seg_dict = gradient_to_maps(method, segments, peaks, grad_seg_dict, spc_output_dir)
 
-    kde_segments, kde_labels, kde_peaks = (
-        kde_dict["segments"],
-        kde_dict["labels"],
-        kde_dict["peaks"],
-    )
-
-    assert len(percent_labels) == n_segments
-    assert len(kmeans_labels) == n_segments
-    assert len(kde_labels) == n_segments
+    # Save results
+    grad_segments_file = open(grad_seg_fn, "wb")
+    pickle.dump(grad_seg_dict, grad_segments_file)
+    grad_segments_file.close()
 
     # Silhouette measures
-    print("Calculating Silhouette measures...")
     silhouette_df_fn = op.join(output_dir, "silhouette_scores.csv")
     if not op.isfile(silhouette_df_fn):
+        print("\tCalculating Silhouette measures...", flush=True)
         compare_segmentations(
             gradient, percent_labels, kmeans_labels, kde_labels, silhouette_df_fn
         )
 
-    # 2.2. Transform KDE segmented gradient maps to activation maps.
-    print("Transforming segmented gradient maps to activation maps...")
-    # Percentile
-    percent_seg_fn = op.join(output_dir, "percentile", "percentile_grad_segments_z.pkl")
-    if not op.isfile(percent_seg_fn):
-        percent_seg_dict = gradient_to_maps(
-            "Percentile", percent_segments, percent_peaks, percent_seg_fn
-        )
-    else:
-        percent_seg_file = open(percent_seg_fn, "rb")
-        percent_seg_dict = pickle.load(percent_seg_file)
-        percent_seg_file.close()
-
-    percent_grad_segments_z = percent_seg_dict["grad_segments_z"]
-
-    # KMeans
-    kmeans_seg_fn = op.join(output_dir, "kmeans", "kmeans_grad_segments_z.pkl")
-    if not op.isfile(kmeans_seg_fn):
-        kmeans_seg_dict = gradient_to_maps("KMeans", kmeans_segments, kmeans_peaks, kmeans_seg_fn)
-    else:
-        kmeans_seg_file = open(kmeans_seg_fn, "rb")
-        kmeans_seg_dict = pickle.load(kmeans_seg_file)
-        kmeans_seg_file.close()
-
-    kmeans_grad_segments_z = kmeans_seg_dict["grad_segments_z"]
-
-    # KDE
-    kde_seg_fn = op.join(output_dir, "kde", "kde_grad_segments_z.pkl")
-    if not op.isfile(kde_seg_fn):
-        kde_seg_dict = gradient_to_maps("KDE", kde_segments, kde_peaks, kde_seg_fn)
-    else:
-        kde_seg_file = open(kde_seg_fn, "rb")
-        kde_seg_dict = pickle.load(kde_seg_file)
-        kde_seg_file.close()
-
-    kde_grad_segments_z = kde_seg_dict["grad_segments_z"]
-
-    return None
+    return grad_seg_dict
 
 
 def gradient_decoding(data_dir):
@@ -416,8 +372,8 @@ def decoding_results():
 if __name__ == "__main__":
     # Define Paths
     # =============
-    project_dir = "/home/data/nbc/misc-projects/Peraza_GradientDecoding"
-    # project_dir = "/Users/jperaza/Documents/GitHub/gradient-decoding"
+    # project_dir = "/home/data/nbc/misc-projects/Peraza_GradientDecoding"
+    project_dir = "/Users/jperaza/Documents/GitHub/gradient-decoding"
     templates_dir = op.join(project_dir, "data", "templates")
     data_dir = op.join(project_dir, "data")
     hcp_gradient_dir = op.join(project_dir, "results", "hcp_gradient")
@@ -426,22 +382,30 @@ if __name__ == "__main__":
     # Run Workflow
     # =============
     # 1. Functional Connectivity Gradient
+    print("1. Functional Connectivity Gradient", flush=True)
     principal_gradient_fn = op.join(hcp_gradient_dir, "principal_gradient.npy")
     if not op.isfile(principal_gradient_fn):
         principal_gradient = hcp_gradient(data_dir, templates_dir, principal_gradient_fn)
     else:
-        print("Gradient file exists. Loading principal gradient...", flush=True)
+        print("\tGradient file exists. Loading principal gradient...", flush=True)
         principal_gradient = np.load(principal_gradient_fn)
 
     # 2. Segmentation and Gradient Maps
-    # grad_maps_z_fn = op.join(gradient_segmentation_dir, "grad_maps_z.npy")
-    # if not op.isfile(grad_maps_z_fn):
-    # gradient_segmentation(principal_gradient, gradient_segmentation_dir)
-    # else:
-    #    grad_maps_z = np.load(grad_maps_z_fn)
+    print("2. Segmentation and Gradient Maps", flush=True)
+    grad_seg_fn = op.join(gradient_segmentation_dir, "grad_segments.pkl")
+    if not op.isfile(grad_seg_fn):
+        grad_seg_dict = gradient_segmentation(principal_gradient, grad_seg_fn)
+    else:
+        print("\tGradient dict exists. Loading segmented gradient...", flush=True)
+        grad_segments_file = open(grad_seg_fn, "rb")
+        grad_seg_dict = pickle.load(grad_segments_file)
+
+    percent_grad_segments = grad_seg_dict["percentile_grad_segments"]
+    kmeans_grad_segments = grad_seg_dict["kmeans_grad_segments"]
+    kde_grad_segments = grad_seg_dict["kde_grad_segments"]
 
     # 3. Meta-Analytic Functional Decoding
-    # gradient_decoding(data_dir)
+    # gradient_decoding(percent_grad_segments, kmeans_grad_segments, kde_grad_segments)
 
     # 4. Performance of Decoding Strategies
     # decoding_performance()

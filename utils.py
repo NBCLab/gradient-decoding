@@ -1,4 +1,5 @@
 """Miscellaneous functions used for analyses."""
+import os
 import os.path as op
 
 import numpy as np
@@ -145,6 +146,7 @@ def plot_kde_segmentation(n_segment, x_samples, y_densities, min_vals, max_vals,
         orient="h",
     )
     """
+    os.makedirs(output_dir, exist_ok=True)
     plt.savefig(
         op.join(output_dir, "kde-segment-{:02d}.png".format(n_segment)),
         bbox_inches="tight",
