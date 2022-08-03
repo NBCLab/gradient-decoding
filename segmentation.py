@@ -396,12 +396,12 @@ def gradient_to_maps(method, segments, peaks, grad_seg_dict, output_dir):
             # Vertices located above the cluster_centers_ in the segment map
             # were translated relative to the maximum
             grad_map_peak = peaks[seg_i][map_i]
+            vrtxs_non_zero = np.where(grad_map != 0)
             vrtxs_to_translate = np.where((grad_map > grad_map_peak) & (grad_map != 0))
             grad_map[vrtxs_to_translate] = grad_map_peak - np.abs(grad_map[vrtxs_to_translate])
 
             # Translate relative to zero
-            grad_map_min = grad_map.min()
-            vrtxs_non_zero = np.where(grad_map != 0)
+            grad_map_min = grad_map[vrtxs_non_zero].min()
             grad_map[vrtxs_non_zero] = np.abs(grad_map_min) + grad_map[vrtxs_non_zero]
 
             # The resulting segment’s map was standardized into a z-score map
