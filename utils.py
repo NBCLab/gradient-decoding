@@ -152,3 +152,4 @@ def plot_kde_segmentation(n_segment, x_samples, y_densities, min_vals, max_vals,
         bbox_inches="tight",
         pad_inches=0,
     )
+    plt.close("all")

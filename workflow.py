@@ -166,7 +166,7 @@ def hcp_gradient(data_dir, template_dir, principal_gradient_fn, pypackage="mapal
     return principal_gradient
 
 
-def gradient_segmentation(gradient, grad_seg_fn):
+def gradient_segmentation(gradient, grad_seg_fn, n_segments):
     """2. Segmentation and Gradient Maps: Evaluate three different segmentation approaches to
     split the gradient spectrum into a finite number of brain maps.
 
@@ -185,7 +185,6 @@ def gradient_segmentation(gradient, grad_seg_fn):
     None : :obj:``
     """
     print("\t2.1. Segment the gradient into k ≥ 3 segments.", flush=True)
-    n_segments = 5
     grad_seg_dict = {}
     output_dir = op.dirname(grad_seg_fn)
 
@@ -411,10 +410,11 @@ def main(project_dir, n_cores):
         principal_gradient = np.load(principal_gradient_fn)
 
     # 2. Segmentation and Gradient Maps
+    n_segments = 30
     print("2. Segmentation and Gradient Maps", flush=True)
     grad_seg_fn = op.join(gradient_segmentation_dir, "grad_segments.pkl")
     if not op.isfile(grad_seg_fn):
-        grad_seg_dict = gradient_segmentation(principal_gradient, grad_seg_fn)
+        grad_seg_dict = gradient_segmentation(principal_gradient, grad_seg_fn, n_segments)
     else:
         print("\tGradient dict exists. Loading segmented gradient...", flush=True)
         grad_segments_file = open(grad_seg_fn, "rb")
@@ -425,9 +425,9 @@ def main(project_dir, n_cores):
     kde_grad_segments = grad_seg_dict["kde_grad_segments"]
 
     # 3. Meta-Analytic Functional Decoding
-    gradient_decoding(
-        data_dir, percent_grad_segments, kmeans_grad_segments, kde_grad_segments, n_cores
-    )
+    # gradient_decoding(
+    #     data_dir, percent_grad_segments, kmeans_grad_segments, kde_grad_segments, n_cores
+    # )
 
     # 4. Performance of Decoding Strategies
     # decoding_performance()

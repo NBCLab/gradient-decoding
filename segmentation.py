@@ -2,6 +2,7 @@
 import os
 import os.path as op
 import pickle
+import warnings
 from abc import ABCMeta
 
 import nibabel as nib
@@ -15,6 +16,7 @@ from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 from sklearn.neighbors import KernelDensity
 from surfplot.utils import add_fslr_medial_wall
+from tqdm import tqdm
 
 import utils
 
@@ -66,7 +68,6 @@ class PCTLSegmentation(Segmentation):
         segmentation_fn,
         n_segments,
         min_n_segments=3,
-        **kwargs,
     ):
         self.segmentation_fn = segmentation_fn
         self.n_segments = n_segments
@@ -151,7 +152,6 @@ class KMeansSegmentation(Segmentation):
         segmentation_fn,
         n_segments,
         min_n_segments=3,
-        **kwargs,
     ):
         self.segmentation_fn = segmentation_fn
         self.n_segments = n_segments
@@ -249,9 +249,12 @@ class KDESegmentation(Segmentation):
         n_segments,
         min_n_segments=3,
         bandwidth=0.26,
-        bw_step=0.005,
-        **kwargs,
+        bw_step=0.05,
     ):
+        if bandwidth < bw_step:
+            raise ValueError(
+                f"bw_step = {bandwidth} should be smaller than initial bandwidth = {bandwidth}"
+            )
         self.segmentation_fn = segmentation_fn
         self.n_segments = n_segments
         self.min_n_segments = min_n_segments
@@ -277,25 +280,25 @@ class KDESegmentation(Segmentation):
         peaks :
 
         """
-        bandwidth = self.bandwidth
+        bandwidth_used_fn = op.join(op.dirname(self.segmentation_fn), "bandwidth_used.npy")
+        os.makedirs(op.dirname(self.segmentation_fn), exist_ok=True)
+        if not op.isfile(bandwidth_used_fn):
+            wr_bandwidth_file = True
+            bandwidths = np.arange(0, self.bandwidth + self.bw_step, self.bw_step)[::-1]
+            bw_used = []
+        else:
+            bandwidths = np.load(bandwidth_used_fn)
 
         segments = []
         labels = []
         boundaries = []
         peaks = []
-        bw_used = []
-        for n_segment in range(self.min_n_segments, self.n_segments + self.min_n_segments):
+        bandwidth_i = 0
+        for n_segment in tqdm(range(self.min_n_segments, self.n_segments + self.min_n_segments)):
             n_kde_segments = 0
-            print(n_segment)
             while n_segment != n_kde_segments:
-                bandwidth -= self.bw_step
-                if bandwidth < 0:
-                    raise ValueError(
-                        f"Bandwidth = {bandwidth} has been reached. "
-                        "Only positive values are allowed for bandwidth."
-                    )
+                bandwidth = bandwidths[bandwidth_i]
 
-                print(bandwidth)
                 kde = KernelDensity(kernel="gaussian", bandwidth=bandwidth).fit(
                     gradient.reshape(-1, 1)
                 )
@@ -307,9 +310,28 @@ class KDESegmentation(Segmentation):
                     argrelextrema(y_densities, np.greater)[0],
                 )
                 n_kde_segments = len(max_vals)
-                print(n_segment, n_kde_segments)
+                print(f"\t\t\t{round(bandwidth, 6)}: {n_segment}, {n_kde_segments}", flush=True)
 
-            print(f"Found {n_segment} number of segments for bandwidth {bandwidth}")
+                if n_segment < n_kde_segments:
+                    new_bw_step = self.bw_step / 2
+                    print(
+                        "\t\t\t\tn_kde_segments cannot exceed n_segment. Resetting bandwidths "
+                        f"array with a bandwidths smaller than {self.bw_step}, {new_bw_step}",
+                        flush=True,
+                    )
+                    bandwidths = np.arange(0, bandwidth + self.bw_step, new_bw_step)[::-1]
+                    self.bw_step = new_bw_step
+                    bandwidth_i = 0  # Reset iterator
+                else:
+                    bandwidth_i += 1
+
+            print(
+                f"\t\t\tFound {n_segment} number of segments for bandwidth {round(bandwidth, 6)}",
+                flush=True,
+            )
+            if wr_bandwidth_file:
+                bw_used.append(bandwidth)
+
             utils.plot_kde_segmentation(
                 n_segment,
                 x_samples,
@@ -348,10 +370,9 @@ class KDESegmentation(Segmentation):
             labels.append(labels_arr)
             boundaries.append(map_bounds)
             peaks.append(x_samples[max_vals])
-            bw_used.append(bandwidth)
 
-        os.makedirs(op.dirname(self.segmentation_fn), exist_ok=True)
-        np.save(op.join(op.dirname(self.segmentation_fn), "bandwidth_used.npy"), bw_used)
+        if wr_bandwidth_file:
+            np.save(bandwidth_used_fn, bw_used)
 
         return segments, labels, boundaries, peaks
 
@@ -404,14 +425,6 @@ def gradient_to_maps(method, segments, peaks, grad_seg_dict, output_dir):
             # grad_map = zscore(grad_map)
             grad_maps.append(grad_map)
 
-            grad_map_full = add_fslr_medial_wall(grad_map, split=False)
-            grad_map_lh, grad_map_rh = grad_map_full[:hemi_vertices], grad_map_full[hemi_vertices:]
-
-            grad_img_lh = GiftiImage()
-            grad_img_rh = GiftiImage()
-            grad_img_lh.add_gifti_data_array(GiftiDataArray(grad_map_lh))
-            grad_img_rh.add_gifti_data_array(GiftiDataArray(grad_map_rh))
-
             grad_map_lh_fn = op.join(
                 output_dir,
                 "source-{}{:02d}_desc-{:02d}_space-fsLR_den-32k_hemi-L_feature.func.gii".format(
@@ -424,9 +437,22 @@ def gradient_to_maps(method, segments, peaks, grad_seg_dict, output_dir):
                     method, segment_sizes[seg_i], map_i
                 ),
             )
-            # Write cortical gradient to Gifti files
-            nib.save(grad_img_lh, grad_map_lh_fn)
-            nib.save(grad_img_rh, grad_map_rh_fn)
+
+            if not (op.isfile(grad_map_lh_fn) and op.isfile(grad_map_rh_fn)):
+                grad_map_full = add_fslr_medial_wall(grad_map, split=False)
+                grad_map_lh, grad_map_rh = (
+                    grad_map_full[:hemi_vertices],
+                    grad_map_full[hemi_vertices:],
+                )
+
+                grad_img_lh = GiftiImage()
+                grad_img_rh = GiftiImage()
+                grad_img_lh.add_gifti_data_array(GiftiDataArray(grad_map_lh))
+                grad_img_rh.add_gifti_data_array(GiftiDataArray(grad_map_rh))
+
+                # Write cortical gradient to Gifti files
+                nib.save(grad_img_lh, grad_map_lh_fn)
+                nib.save(grad_img_rh, grad_map_rh_fn)
 
         grad_segments.append(grad_maps)
 
