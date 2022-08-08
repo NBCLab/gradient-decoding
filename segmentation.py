@@ -2,7 +2,6 @@
 import os
 import os.path as op
 import pickle
-import warnings
 from abc import ABCMeta
 
 import nibabel as nib
@@ -11,7 +10,6 @@ import pandas as pd
 from nibabel import GiftiImage
 from nibabel.gifti import GiftiDataArray
 from scipy.signal import argrelextrema
-from scipy.stats import zscore
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 from sklearn.neighbors import KernelDensity
@@ -19,6 +17,8 @@ from surfplot.utils import add_fslr_medial_wall
 from tqdm import tqdm
 
 import utils
+
+# from scipy.stats import zscore
 
 
 class Segmentation(metaclass=ABCMeta):

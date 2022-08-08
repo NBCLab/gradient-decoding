@@ -19,6 +19,7 @@ from nimare.meta.cbma import mkda
 from surfplot.utils import add_fslr_medial_wall
 
 import utils
+from decoding import annotate_lda
 from segmentation import (
     KDESegmentation,
     KMeansSegmentation,
@@ -247,7 +248,7 @@ def gradient_segmentation(gradient, grad_seg_fn, n_segments):
 
 
 def gradient_decoding(
-    data_dir, percent_grad_segments, kmeans_grad_segments, kde_grad_segments, n_cores
+    data_dir, output_dir, percent_grad_segments, kmeans_grad_segments, kde_grad_segments, n_cores
 ):
     """3. Meta-Analytic Functional Decoding: Implement six different decoding strategies and
     perform an optimization test to identify the segment size to split the gradient for each
@@ -265,16 +266,18 @@ def gradient_decoding(
     -------
     None : :obj:``
     """
-    output_dir = op.join(data_dir, "meta-analysis")
+    data_dir = op.join(data_dir, "meta-analysis")
+    os.makedirs(data_dir, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
-    datasets = ["neurosynth", "neuroquery"]
 
+    datasets = ["neurosynth", "neuroquery"]
     for dataset in datasets:
-        dset_fn = os.path.join(output_dir, f"{dataset}_dataset.pkl.gz")
+        dset_fn = os.path.join(data_dir, f"{dataset}_dataset.pkl.gz")
         if not os.path.isfile(dset_fn):
+            print(f"\tFetching {dataset} database...", flush=True)
             if dataset == "neurosynth":
                 files = fetch_neurosynth(
-                    data_dir=output_dir,
+                    data_dir=data_dir,
                     version="7",
                     overwrite=False,
                     source="abstract",
@@ -282,7 +285,7 @@ def gradient_decoding(
                 )
             elif dataset == "neuroquery":
                 files = fetch_neuroquery(
-                    data_dir=output_dir,
+                    data_dir=data_dir,
                     version="1",
                     overwrite=False,
                     source="combined",
@@ -299,15 +302,16 @@ def gradient_decoding(
             )
             dset.save(dset_fn)
         else:
+            print(f"\tLoading {dataset} database...", flush=True)
             dset = Dataset.load(dset_fn)
 
         # Check whether dset contain text for LDA-based models
         if dataset == "neurosynth":
             if "abstract" in dset.texts:
                 # Download Neurosynth abstract
-                print("Dataset contains abstract")
+                print(f"\t\tDataset {dataset} contains abstract", flush=True)
             else:
-                print("Downloading abstract to dset")
+                print(f"\t\tDownloading abstract to {dataset} dset", flush=True)
                 dset = download_abstracts(dset, "jpera054@fiu.edu")
                 dset.save(dset_fn)
         elif dataset == "neuroquery":
@@ -315,18 +319,18 @@ def gradient_decoding(
             pass
 
         if dset.basepath is None:
-            basepath_path = os.path.join(output_dir, f"{dataset}_basepath")
+            basepath_path = op.join(data_dir, f"{dataset}_basepath")
             os.makedirs(basepath_path, exist_ok=True)
             dset.update_path(basepath_path)
 
         # Term-based meta-analysis
-        print("Performing term-based meta-analysis...")
+        print(f"\tPerforming term-based meta-analysis on {dataset}...", flush=True)
         if dataset == "neurosynth":
             feature_group = "terms_abstract_tfidf"
         elif dataset == "neuroquery":
             feature_group = "neuroquery6308_combined_tfidf"
 
-        term_based_decoder_fn = os.path.join(output_dir, f"term-based_{dataset}_decoder.pkl.gz")
+        term_based_decoder_fn = op.join(output_dir, f"term-based_{dataset}_decoder.pkl.gz")
         if not op.isfile(term_based_decoder_fn):
             decoder = CorrelationDecoder(
                 frequency_threshold=0.001,
@@ -341,10 +345,27 @@ def gradient_decoding(
             decoder_file = gzip.open(term_based_decoder_fn, "rb")
             decoder = pickle.load(decoder_file)
 
-        term_based_meta_maps = decoder.images_
-        print(term_based_meta_maps)
-
         # LDA-based meta-analysis
+        print(f"\tPerforming LDA-based meta-analysis on {dataset}...", flush=True)
+        n_topics = 200
+        feature_group = f"LDA{n_topics}"
+        lda_based_decoder_fn = op.join(output_dir, f"lda-based_{dataset}_decoder.pkl.gz")
+        if not op.isfile(lda_based_decoder_fn):
+            dset = annotate_lda(dset, dataset, data_dir, n_topics=n_topics, n_cores=n_cores)
+            dset.save(dset_fn)
+
+            lda_decoder = CorrelationDecoder(
+                frequency_threshold=0.05,
+                meta_estimator=mkda.MKDAChi2,
+                feature_group=feature_group,
+                target_image="z_desc-specificity",
+                n_cores=n_cores,
+            )
+            lda_decoder.fit(dset)
+            lda_decoder.save(lda_based_decoder_fn, compress=True)
+        else:
+            lda_decoder_file = gzip.open(lda_based_decoder_fn, "rb")
+            lda_decoder = pickle.load(lda_decoder_file)
 
         # GCLDA-based meta-analysis
 
@@ -398,7 +419,7 @@ def main(project_dir, n_cores):
     templates_dir = op.join(project_dir, "data", "templates")
     hcp_gradient_dir = op.join(project_dir, "results", "hcp_gradient")
     gradient_segmentation_dir = op.join(project_dir, "results", "gradient_segmentation")
-    # gradient_decoding_dir = op.join(project_dir, "results", "gradient_decoding")
+    gradient_decoding_dir = op.join(project_dir, "results", "gradient_decoding")
     # decoding_performance_dir = op.join(project_dir, "results", "decoding_performance")
     # decoding_results_dir = op.join(project_dir, "results", "decoding_results")
 
@@ -429,10 +450,15 @@ def main(project_dir, n_cores):
     kde_grad_segments = grad_seg_dict["kde_grad_segments"]
 
     # 3. Meta-Analytic Functional Decoding
-    # print("3. Meta-Analytic Functional Decoding", flush=True)
-    # gradient_decoding(
-    #     data_dir, percent_grad_segments, kmeans_grad_segments, kde_grad_segments, n_cores
-    # )
+    print("3. Meta-Analytic Functional Decoding", flush=True)
+    gradient_decoding(
+        data_dir,
+        gradient_decoding_dir,
+        percent_grad_segments,
+        kmeans_grad_segments,
+        kde_grad_segments,
+        n_cores,
+    )
 
     # 4. Performance of Decoding Strategies
     # print("4. Performance of Decoding Strategies", flush=True)
