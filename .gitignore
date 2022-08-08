@@ -21,3 +21,6 @@ __pycache__
 
 # Untrack results for now
 results/
+
+# Temporal scripts and jobs
+temp/
