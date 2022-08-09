@@ -324,7 +324,6 @@ def gradient_decoding(
             dset.update_path(basepath_path)
 
         # Term-based meta-analysis
-        print(f"\tPerforming term-based meta-analysis on {dataset}...", flush=True)
         if dataset == "neurosynth":
             feature_group = "terms_abstract_tfidf"
         elif dataset == "neuroquery":
@@ -332,6 +331,7 @@ def gradient_decoding(
 
         term_based_decoder_fn = op.join(output_dir, f"term-based_{dataset}_decoder.pkl.gz")
         if not op.isfile(term_based_decoder_fn):
+            print(f"\tPerforming Term-based meta-analysis on {dataset}...", flush=True)
             decoder = CorrelationDecoder(
                 frequency_threshold=0.001,
                 meta_estimator=mkda.MKDAChi2,
@@ -342,18 +342,20 @@ def gradient_decoding(
             decoder.fit(dset)
             decoder.save(term_based_decoder_fn, compress=True)
         else:
+            print(f"\Loading Term-based meta-analytic maps from {dataset}...", flush=True)
             decoder_file = gzip.open(term_based_decoder_fn, "rb")
             decoder = pickle.load(decoder_file)
 
         # LDA-based meta-analysis
-        print(f"\tPerforming LDA-based meta-analysis on {dataset}...", flush=True)
         n_topics = 200
         feature_group = f"LDA{n_topics}"
         lda_based_decoder_fn = op.join(output_dir, f"lda-based_{dataset}_decoder.pkl.gz")
         if not op.isfile(lda_based_decoder_fn):
+            print(f"\tRunning LDA model on {dataset}...", flush=True)
             dset = annotate_lda(dset, dataset, data_dir, n_topics=n_topics, n_cores=n_cores)
             dset.save(dset_fn)
 
+            print(f"\tPerforming LDA-based meta-analysis on {dataset}...", flush=True)
             lda_decoder = CorrelationDecoder(
                 frequency_threshold=0.05,
                 meta_estimator=mkda.MKDAChi2,
@@ -364,6 +366,7 @@ def gradient_decoding(
             lda_decoder.fit(dset)
             lda_decoder.save(lda_based_decoder_fn, compress=True)
         else:
+            print(f"\Loading LDA-based meta-analytic maps from {dataset}...", flush=True)
             lda_decoder_file = gzip.open(lda_based_decoder_fn, "rb")
             lda_decoder = pickle.load(lda_decoder_file)
 
