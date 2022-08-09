@@ -2,11 +2,11 @@
 #SBATCH --job-name=workflow
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem-per-cpu=4gb
+#SBATCH --cpus-per-task=20
+#SBATCH --mem-per-cpu=12gb
 #SBATCH --account=iacc_nbc
 #SBATCH --qos=pq_nbc
-#SBATCH --partition=IB_16C_96G
+#SBATCH --partition=IB_40C_512G
 # Outputs ----------------------------------
 #SBATCH --output=log/%x_%j.out
 #SBATCH --error=log/%x_%j.err
