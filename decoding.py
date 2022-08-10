@@ -15,7 +15,7 @@ LGR = logging.getLogger(__name__)
 def _generate_counts(
     text_df, vocabulary=None, text_column="abstract", tfidf=True, min_df=0.01, max_df=0.99
 ):
-    """Generate tf-idf weights for unigrams/bigrams derived from textual data.
+    """Generate tf-idf/counts weights for unigrams/bigrams derived from textual data.
 
     Parameters
     ----------
@@ -78,32 +78,9 @@ def _generate_counts(
     return weights_df
 
 
-def annotate_lda(dset, dataset, data_dir, n_topics=200, n_cores=1):
-    """Generate tf-idf weights for unigrams/bigrams derived from textual data.
-
-    Parameters
-    ----------
-    dset : :obj:`~nimare.dataset.Dataset`
-        A Dataset with, at minimum, text available in the ``self.text_column`` column of its
-        :py:attr:`~nimare.dataset.Dataset.texts` attribute.
-    n_topics : :obj:`int`
-        Number of topics for topic model. This corresponds to the model's ``n_components``
-        parameter. Must be an integer >= 1.
-    dataset: str
-        Dataset name. Possible options: "neurosynth" or "neuroquery"
-    data_dir: str
-        Path to data directory.
-    n_cores : :obj:`int`, optional
-        Number of cores to use for parallelization.
-        If <=0, defaults to using all available cores.
-        Default is 1.
-
-    Returns
-        -------
-        dset : :obj:`~nimare.dataset.Dataset`
-            A new Dataset with an updated :py:attr:`~nimare.dataset.Dataset.annotations` attribute.
-    """
-    if dataset == "neurosynth":
+def _get_counts(dset, dset_name, data_dir):
+    """Get counts weights for unigrams/bigrams derived from textual data."""
+    if dset_name == "neurosynth":
         feature_group = "terms_abstract_tfidf"
         feature_names = dset.annotations.columns.values
         feature_names = [f for f in feature_names if f.startswith(feature_group)]
@@ -117,7 +94,7 @@ def annotate_lda(dset, dataset, data_dir, n_topics=200, n_cores=1):
             min_df=2,
         )
 
-    elif dataset == "neuroquery":
+    elif dset_name == "neuroquery":
         counts_dir = op.join(data_dir, "neuroquery", "neuroquery_counts")
         counts_arr_fns = glob(op.join(counts_dir, "*_features.npz"))
         counts_sparse = None
@@ -129,11 +106,42 @@ def annotate_lda(dset, dataset, data_dir, n_topics=200, n_cores=1):
         counts_arr = counts_sparse.todense()
 
         ids = dset.annotations["id"].tolist()
-        feature_names = dset.inputs_["annotations"].columns.values
+        feature_names = dset.annotations.columns.values
         counts_df = pd.DataFrame(counts_arr, columns=feature_names, index=ids)
         counts_df.index.name = "id"
 
+    return counts_df
+
+
+def annotate_lda(dset, dset_name, data_dir, lda_based_model_fn, n_topics=200, n_cores=1):
+    """Annotate Dataset with the resutls of an LDA model.
+
+    Parameters
+    ----------
+    dset : :obj:`~nimare.dataset.Dataset`
+        A Dataset with, at minimum, text available in the ``self.text_column`` column of its
+        :py:attr:`~nimare.dataset.Dataset.texts` attribute.
+    n_topics : :obj:`int`
+        Number of topics for topic model. This corresponds to the model's ``n_components``
+        parameter. Must be an integer >= 1.
+    dset_name: str
+        Dataset name. Possible options: "neurosynth" or "neuroquery"
+    data_dir: str
+        Path to data directory.
+    n_cores : :obj:`int`, optional
+        Number of cores to use for parallelization.
+        If <=0, defaults to using all available cores.
+        Default is 1.
+
+    Returns
+        -------
+        dset : :obj:`~nimare.dataset.Dataset`
+            A new Dataset with an updated :py:attr:`~nimare.dataset.Dataset.annotations` attribute.
+    """
+    counts_df = _get_counts(dset, dset_name, data_dir)
+
     model = LDAModel(n_topics=n_topics, max_iter=1000, n_cores=n_cores)
     new_dset = model.fit(dset, counts_df)
+    model.save(lda_based_model_fn, compress=True)
 
     return new_dset

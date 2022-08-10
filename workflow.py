@@ -11,6 +11,7 @@ import numpy as np
 from brainspace.gradient import GradientMaps
 from nibabel import GiftiImage
 from nibabel.gifti import GiftiDataArray
+from nimare.annotate.gclda import GCLDAModel
 from nimare.dataset import Dataset
 from nimare.decode.continuous import CorrelationDecoder
 from nimare.extract import download_abstracts, fetch_neuroquery, fetch_neurosynth
@@ -19,7 +20,7 @@ from nimare.meta.cbma import mkda
 from surfplot.utils import add_fslr_medial_wall
 
 import utils
-from decoding import annotate_lda
+from decoding import _get_counts, annotate_lda
 from segmentation import (
     KDESegmentation,
     KMeansSegmentation,
@@ -270,12 +271,12 @@ def gradient_decoding(
     os.makedirs(data_dir, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
 
-    datasets = ["neurosynth", "neuroquery"]
-    for dataset in datasets:
-        dset_fn = os.path.join(data_dir, f"{dataset}_dataset.pkl.gz")
+    dset_names = ["neurosynth", "neuroquery"]
+    for dset_name in dset_names:
+        dset_fn = os.path.join(data_dir, f"{dset_name}_dataset.pkl.gz")
         if not os.path.isfile(dset_fn):
-            print(f"\tFetching {dataset} database...", flush=True)
-            if dataset == "neurosynth":
+            print(f"\tFetching {dset_name} database...", flush=True)
+            if dset_name == "neurosynth":
                 files = fetch_neurosynth(
                     data_dir=data_dir,
                     version="7",
@@ -283,7 +284,7 @@ def gradient_decoding(
                     source="abstract",
                     vocab="terms",
                 )
-            elif dataset == "neuroquery":
+            elif dset_name == "neuroquery":
                 files = fetch_neuroquery(
                     data_dir=data_dir,
                     version="1",
@@ -302,36 +303,36 @@ def gradient_decoding(
             )
             dset.save(dset_fn)
         else:
-            print(f"\tLoading {dataset} database...", flush=True)
+            print(f"\tLoading {dset_name} database...", flush=True)
             dset = Dataset.load(dset_fn)
 
         # Check whether dset contain text for LDA-based models
-        if dataset == "neurosynth":
+        if dset_name == "neurosynth":
             if "abstract" in dset.texts:
                 # Download Neurosynth abstract
-                print(f"\t\tDataset {dataset} contains abstract", flush=True)
+                print(f"\t\tDataset {dset_name} contains abstract", flush=True)
             else:
-                print(f"\t\tDownloading abstract to {dataset} dset", flush=True)
+                print(f"\t\tDownloading abstract to {dset_name} dset", flush=True)
                 dset = download_abstracts(dset, "jpera054@fiu.edu")
                 dset.save(dset_fn)
-        elif dataset == "neuroquery":
+        elif dset_name == "neuroquery":
             # LDA model will be run on word_counts, so the text is not needed
             pass
 
         if dset.basepath is None:
-            basepath_path = op.join(data_dir, f"{dataset}_basepath")
+            basepath_path = op.join(data_dir, f"{dset_name}_basepath")
             os.makedirs(basepath_path, exist_ok=True)
             dset.update_path(basepath_path)
 
         # Term-based meta-analysis
-        if dataset == "neurosynth":
+        if dset_name == "neurosynth":
             feature_group = "terms_abstract_tfidf"
-        elif dataset == "neuroquery":
+        elif dset_name == "neuroquery":
             feature_group = "neuroquery6308_combined_tfidf"
 
-        term_based_decoder_fn = op.join(output_dir, f"term-based_{dataset}_decoder.pkl.gz")
+        term_based_decoder_fn = op.join(output_dir, f"term-based_{dset_name}_decoder.pkl.gz")
         if not op.isfile(term_based_decoder_fn):
-            print(f"\tPerforming Term-based meta-analysis on {dataset}...", flush=True)
+            print(f"\tPerforming Term-based meta-analysis on {dset_name}...", flush=True)
             decoder = CorrelationDecoder(
                 frequency_threshold=0.001,
                 meta_estimator=mkda.MKDAChi2,
@@ -342,21 +343,25 @@ def gradient_decoding(
             decoder.fit(dset)
             decoder.save(term_based_decoder_fn, compress=True)
         else:
-            print(f"\tLoading Term-based meta-analytic maps from {dataset}...", flush=True)
+            print(f"\tLoading Term-based meta-analytic maps from {dset_name}...", flush=True)
             decoder_file = gzip.open(term_based_decoder_fn, "rb")
             decoder = pickle.load(decoder_file)
 
         # LDA-based meta-analysis
         n_topics = 200
         feature_group = f"LDA{n_topics}"
-        lda_based_decoder_fn = op.join(output_dir, f"lda-based_{dataset}_decoder.pkl.gz")
+        lda_based_decoder_fn = op.join(output_dir, f"lda-based_{dset_name}_decoder.pkl.gz")
         if not op.isfile(lda_based_decoder_fn):
-            print(f"\tRunning LDA model on {dataset}...", flush=True)
+            print(f"\tRunning LDA model on {dset_name}...", flush=True)
             # n_cores=1 for LDA. See: https://github.com/scikit-learn/scikit-learn/issues/8943
-            dset = annotate_lda(dset, dataset, data_dir, n_topics=n_topics, n_cores=1)
+            lda_based_model_fn = op.join(output_dir, f"lda_{dset_name}_model.pkl.gz")
+            # if not op.isfile(lda_based_model_fn):
+            dset = annotate_lda(
+                dset, dset_name, data_dir, lda_based_model_fn, n_topics=n_topics, n_cores=1
+            )
             dset.save(dset_fn)
 
-            print(f"\tPerforming LDA-based meta-analysis on {dataset}...", flush=True)
+            print(f"\tPerforming LDA-based meta-analysis on {dset_name}...", flush=True)
             lda_decoder = CorrelationDecoder(
                 frequency_threshold=0.05,
                 meta_estimator=mkda.MKDAChi2,
@@ -367,11 +372,29 @@ def gradient_decoding(
             lda_decoder.fit(dset)
             lda_decoder.save(lda_based_decoder_fn, compress=True)
         else:
-            print(f"\tLoading LDA-based meta-analytic maps from {dataset}...", flush=True)
+            print(f"\tLoading LDA-based meta-analytic maps from {dset_name}...", flush=True)
             lda_decoder_file = gzip.open(lda_based_decoder_fn, "rb")
             lda_decoder = pickle.load(lda_decoder_file)
 
         # GCLDA-based meta-analysis
+        gclda_based_model_fn = op.join(output_dir, f"gclda_{dset_name}_model.pkl.gz")
+        if not op.isfile(gclda_based_model_fn):
+            print(f"\tRunning GCLDA model on {dset_name}...", flush=True)
+            counts_df = _get_counts(dset, dset_name, data_dir)
+            gclda_model = GCLDAModel(
+                counts_df,
+                dset.coordinates,
+                mask=dset.masker.mask_img,
+                n_topics=n_topics,
+                n_regions=4,
+                symmetric=True,
+            )
+            gclda_model.fit(n_iters=20000, loglikely_freq=20)
+            gclda_model.save(gclda_based_model_fn, compress=True)
+        else:
+            print(f"\tLoading GCLDA-based meta-analytic maps from {dset_name}...", flush=True)
+            gclda_decoder_file = gzip.open(gclda_based_model_fn, "rb")
+            gclda_model = pickle.load(gclda_decoder_file)
 
     return None
 
