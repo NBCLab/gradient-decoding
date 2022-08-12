@@ -1,5 +1,4 @@
 """Mata-analytic decoding tools."""
-import logging
 import os.path as op
 from glob import glob
 
@@ -8,8 +7,6 @@ from nimare.annotate.lda import LDAModel
 from nimare.utils import get_resource_path
 from scipy.sparse import load_npz
 from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
-
-LGR = logging.getLogger(__name__)
 
 
 def _generate_counts(
@@ -38,7 +35,7 @@ def _generate_counts(
     text_df = text_df.loc[text_df["id"].isin(keep_ids)]
 
     if len(keep_ids) != len(orig_ids):
-        LGR.info(f"Retaining {len(keep_ids)}/{len(orig_ids)} studies")
+        print(f"\t\tRetaining {len(keep_ids)}/{len(orig_ids)} studies", flush=True)
 
     ids = text_df["id"].tolist()
     text = text_df[text_column].tolist()
@@ -140,7 +137,7 @@ def annotate_lda(dset, dset_name, data_dir, lda_based_model_fn, n_topics=200, n_
     """
     counts_df = _get_counts(dset, dset_name, data_dir)
 
-    model = LDAModel(n_topics=n_topics, max_iter=1000, n_cores=n_cores)
+    model = LDAModel(n_topics=n_topics, max_iter=20000, n_cores=n_cores)
     new_dset = model.fit(dset, counts_df)
     model.save(lda_based_model_fn, compress=True)
 
