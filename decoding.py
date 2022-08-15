@@ -137,7 +137,7 @@ def annotate_lda(dset, dset_name, data_dir, lda_based_model_fn, n_topics=200, n_
     """
     counts_df = _get_counts(dset, dset_name, data_dir)
 
-    model = LDAModel(n_topics=n_topics, max_iter=20000, n_cores=n_cores)
+    model = LDAModel(n_topics=n_topics, max_iter=1000, n_cores=n_cores)
     new_dset = model.fit(dset, counts_df)
     model.save(lda_based_model_fn, compress=True)
 
