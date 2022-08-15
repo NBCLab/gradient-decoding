@@ -354,12 +354,15 @@ def gradient_decoding(
         if not op.isfile(lda_based_decoder_fn):
             print(f"\tRunning LDA model on {dset_name}...", flush=True)
             # n_cores=1 for LDA. See: https://github.com/scikit-learn/scikit-learn/issues/8943
-            lda_based_model_fn = op.join(output_dir, f"lda_{dset_name}_model.pkl.gz")
-            # if not op.isfile(lda_based_model_fn):
-            dset = annotate_lda(
-                dset, dset_name, data_dir, lda_based_model_fn, n_topics=n_topics, n_cores=1
-            )
-            dset.save(dset_fn)
+            new_dset_fn = dset_fn.split("_dataset.pkl.gz")[0] + "_lda_dataset.pkl.gz"
+            if not op.isfile(new_dset_fn):
+                lda_based_model_fn = op.join(output_dir, f"lda_{dset_name}_model.pkl.gz")
+                dset = annotate_lda(
+                    dset, dset_name, data_dir, lda_based_model_fn, n_topics=n_topics, n_cores=1
+                )
+                dset.save(new_dset_fn)
+            else:
+                dset = Dataset.load(new_dset_fn)
 
             print(f"\tPerforming LDA-based meta-analysis on {dset_name}...", flush=True)
             lda_decoder = CorrelationDecoder(
