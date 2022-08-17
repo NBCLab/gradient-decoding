@@ -108,7 +108,7 @@ def _get_counts(dset, dset_name, data_dir):
         feature_names = [f for f in feature_names if f.startswith(feature_group)]
         vocabulary = [f.split("__")[-1] for f in feature_names]
 
-        counts_df = pd.DataFrame(counts_arr, columns=feature_names, index=ids)
+        counts_df = pd.DataFrame(counts_arr, columns=vocabulary, index=ids)
         counts_df.index.name = "id"
 
     return counts_df
