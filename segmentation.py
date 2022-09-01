@@ -11,7 +11,7 @@ from nibabel import GiftiImage
 from nibabel.gifti import GiftiDataArray
 from scipy.signal import argrelextrema
 from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score
+from sklearn.metrics import silhouette_samples, silhouette_score
 from sklearn.neighbors import KernelDensity
 from surfplot.utils import add_fslr_medial_wall
 from tqdm import tqdm
@@ -379,35 +379,62 @@ class KDESegmentation(Segmentation):
 
 def compare_segmentations(gradient, percent_labels, kmeans_labels, kde_labels, silhouette_df_fn):
     n_segments = len(percent_labels)
-    segment_sizes = [labels.max() + 1 for labels in percent_labels]
+    segment_sizes = [int(labels.max()) + 1 for labels in percent_labels]
+    print(segment_sizes)
     silhouette_df = pd.DataFrame(index=segment_sizes)
     silhouette_df.index.name = "segment_sizes"
+    output_dir = op.dirname(silhouette_df_fn)
 
-    percent_scores = np.zeros(n_segments)
-    kmeans_scores = np.zeros(n_segments)
-    kde_scores = np.zeros(n_segments)
-    for segment_i in range(n_segments):
-        percent_scores[segment_i] = silhouette_score(
-            gradient.reshape(-1, 1), percent_labels[segment_i], metric="euclidean"
-        )
-        kmeans_scores[segment_i] = silhouette_score(
-            gradient.reshape(-1, 1), kmeans_labels[segment_i], metric="euclidean"
-        )
-        kde_scores[segment_i] = silhouette_score(
-            gradient.reshape(-1, 1), kde_labels[segment_i], metric="euclidean"
-        )
+    labels_lst = [percent_labels, kmeans_labels, kde_labels]
 
-    silhouette_df["percentile"] = percent_scores
-    silhouette_df["kmeans"] = kmeans_scores
-    silhouette_df["kde"] = kde_scores
+    desc = "SilhouetteSamples"
+
+    for met_i, method in enumerate(["Percentile", "KMeans", "KDE"]):
+        spc_output_dir = op.join(output_dir, method.lower())
+
+        scores = np.zeros(n_segments)
+        samples = np.zeros((n_segments, gradient.shape[0]))
+        for segment_i in range(n_segments):
+            print(method, segment_i, n_segments)
+            scores[segment_i] = silhouette_score(
+                gradient.reshape(-1, 1), labels_lst[met_i][segment_i], metric="euclidean"
+            )
+            samples[segment_i, :] = silhouette_samples(
+                gradient.reshape(-1, 1), labels_lst[met_i][segment_i], metric="euclidean"
+            )
+
+            samples_lh_fn = op.join(
+                spc_output_dir,
+                "source-{}{:02d}_desc-{}_space-fsLR_den-32k_hemi-L_feature.func.gii".format(
+                    method,
+                    segment_sizes[segment_i],
+                    desc,
+                ),
+            )
+            samples_rh_fn = op.join(
+                spc_output_dir,
+                "source-{}{:02d}_desc-{}_space-fsLR_den-32k_hemi-R_feature.func.gii".format(
+                    method,
+                    segment_sizes[segment_i],
+                    desc,
+                ),
+            )
+
+            print(samples[segment_i, :].min(), samples[segment_i, :].max())
+
+            if not (op.isfile(samples_lh_fn) and op.isfile(samples_rh_fn)):
+                scores_to_gii(samples[segment_i, :], samples_lh_fn, samples_rh_fn)
+
+        silhouette_df[f"{method.lower()}"] = scores
+
+        samples_fn = op.join(spc_output_dir, f"{method.lower()}_samples.npy")
+        np.save(samples_fn, samples)
 
     silhouette_df.to_csv(silhouette_df_fn)
 
 
 def gradient_to_maps(method, segments, peaks, grad_seg_dict, output_dir):
     "Transform segmented gradient maps to normalized activation maps."
-    full_vertices = 64984
-    hemi_vertices = int(full_vertices / 2)
 
     segment_sizes = [len(segments) for segments in segments]
     grad_segments = []
@@ -432,35 +459,42 @@ def gradient_to_maps(method, segments, peaks, grad_seg_dict, output_dir):
 
             grad_map_lh_fn = op.join(
                 output_dir,
-                "source-{}{:02d}_desc-{:02d}_space-fsLR_den-32k_hemi-L_feature.func.gii".format(
+                "source-{}{:02d}_desc-Bin{:02d}_space-fsLR_den-32k_hemi-L_feature.func.gii".format(
                     method, segment_sizes[seg_i], map_i
                 ),
             )
             grad_map_rh_fn = op.join(
                 output_dir,
-                "source-{}{:02d}_desc-{:02d}_space-fsLR_den-32k_hemi-R_feature.func.gii".format(
+                "source-{}{:02d}_desc-Bin{:02d}_space-fsLR_den-32k_hemi-R_feature.func.gii".format(
                     method, segment_sizes[seg_i], map_i
                 ),
             )
 
             if not (op.isfile(grad_map_lh_fn) and op.isfile(grad_map_rh_fn)):
-                grad_map_full = add_fslr_medial_wall(grad_map, split=False)
-                grad_map_lh, grad_map_rh = (
-                    grad_map_full[:hemi_vertices],
-                    grad_map_full[hemi_vertices:],
-                )
-
-                grad_img_lh = GiftiImage()
-                grad_img_rh = GiftiImage()
-                grad_img_lh.add_gifti_data_array(GiftiDataArray(grad_map_lh))
-                grad_img_rh.add_gifti_data_array(GiftiDataArray(grad_map_rh))
-
-                # Write cortical gradient to Gifti files
-                nib.save(grad_img_lh, grad_map_lh_fn)
-                nib.save(grad_img_rh, grad_map_rh_fn)
+                scores_to_gii(grad_map, grad_map_lh_fn, grad_map_rh_fn)
 
         grad_segments.append(grad_maps)
 
     grad_seg_dict[f"{method.lower()}_grad_segments"] = grad_segments
 
     return grad_seg_dict
+
+
+def scores_to_gii(scores, lh_fn, rh_fn):
+    full_vertices = 64984
+    hemi_vertices = int(full_vertices / 2)
+
+    grad_map_full = add_fslr_medial_wall(scores, split=False)
+    grad_map_lh, grad_map_rh = (
+        grad_map_full[:hemi_vertices],
+        grad_map_full[hemi_vertices:],
+    )
+
+    grad_img_lh = GiftiImage()
+    grad_img_rh = GiftiImage()
+    grad_img_lh.add_gifti_data_array(GiftiDataArray(grad_map_lh))
+    grad_img_rh.add_gifti_data_array(GiftiDataArray(grad_map_rh))
+
+    # Write cortical gradient to Gifti files
+    nib.save(grad_img_lh, lh_fn)
+    nib.save(grad_img_rh, rh_fn)

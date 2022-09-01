@@ -13,7 +13,7 @@ from surfplot import Plot
 from surfplot.utils import threshold
 
 
-def plot_gradient(data_dir, grad_seg_fnames, cmap="viridis", threshold_=None):
+def plot_gradient(data_dir, grad_seg_fnames, cmap="viridis", threshold_=None, color_range=None):
     neuromaps_dir = op.join(data_dir, "neuromaps-data")
     surfaces = fetch_fslr(density="32k", data_dir=neuromaps_dir)
 
@@ -30,7 +30,7 @@ def plot_gradient(data_dir, grad_seg_fnames, cmap="viridis", threshold_=None):
 
         p = Plot(surf_lh=lh, surf_rh=rh)
         p.add_layer({"left": sulc_lh, "right": sulc_rh}, cmap="binary_r", cbar=False)
-        p.add_layer({"left": lh_grad, "right": rh_grad}, cmap=cmap)
+        p.add_layer({"left": lh_grad, "right": rh_grad}, cmap=cmap, color_range=color_range)
 
         fig = p.build()
         base_name = op.basename(grad_segment_lh)
