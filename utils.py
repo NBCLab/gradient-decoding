@@ -2,13 +2,16 @@
 import os
 import os.path as op
 
+import nibabel as nib
 import numpy as np
 from matplotlib import pyplot as plt
 from matplotlib.collections import LineCollection
+from neuromaps.datasets import fetch_atlas
+from nibabel.gifti import GiftiDataArray
 from sklearn.metrics import pairwise_distances
 
 
-def rm_fslr_medial_wall(data_lh, data_rh, wall_lh, wall_rh, join=True):
+def rm_fslr_medial_wall(data_lh, data_rh, neuromaps_dir, join=True):
     """Remove medial wall from data in fsLR space
     Data in 32k fs_LR space (e.g., Human Connectome Project data) often in
     GIFTI format include the medial wall in their data arrays, which results
@@ -37,6 +40,11 @@ def rm_fslr_medial_wall(data_lh, data_rh, wall_lh, wall_rh, join=True):
     assert data_lh.shape[0] == 32492
     assert data_rh.shape[0] == 32492
 
+    atlas = fetch_atlas("fsLR", "32k", data_dir=neuromaps_dir, verbose=0)
+    medial_lh, medial_rh = atlas["medial"]
+    wall_lh = nib.load(medial_lh).agg_data()
+    wall_rh = nib.load(medial_rh).agg_data()
+
     data_lh = data_lh[np.where(wall_lh != 0)]
     data_rh = data_rh[np.where(wall_rh != 0)]
 
@@ -46,6 +54,27 @@ def rm_fslr_medial_wall(data_lh, data_rh, wall_lh, wall_rh, join=True):
         return data
     else:
         return data_lh, data_rh
+
+
+def zero_fslr_medial_wall(data_lh, data_rh, neuromaps_dir):
+    """Remove medial wall from data in fsLR space"""
+
+    atlas = fetch_atlas("fsLR", "32k", data_dir=neuromaps_dir, verbose=0)
+    medial_lh, medial_rh = atlas["medial"]
+    medial_arr_lh = nib.load(medial_lh).agg_data()
+    medial_arr_rh = nib.load(medial_rh).agg_data()
+
+    data_arr_lh = data_lh.agg_data()
+    data_arr_rh = data_lh.agg_data()
+    data_arr_lh[np.where(medial_arr_lh == 0)] = 0
+    data_arr_rh[np.where(medial_arr_rh == 0)] = 0
+
+    data_lh.remove_gifti_data_array(0)
+    data_rh.remove_gifti_data_array(0)
+    data_lh.add_gifti_data_array(GiftiDataArray(data_arr_lh))
+    data_rh.add_gifti_data_array(GiftiDataArray(data_arr_rh))
+
+    return data_lh, data_rh
 
 
 def affinity(matrix, sparsity):
