@@ -2,9 +2,13 @@
 import os.path as op
 from glob import glob
 
+import nibabel as nib
+import numpy as np
 import pandas as pd
+from neuromaps.datasets import fetch_atlas
 from nimare.annotate.lda import LDAModel
 from nimare.utils import get_resource_path
+from netneurotools import stats as nnstats
 from scipy.sparse import load_npz
 from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 
@@ -146,3 +150,30 @@ def annotate_lda(dset, dset_name, data_dir, lda_based_model_fn, n_topics=200, n_
     model.save(lda_based_model_fn, compress=True)
 
     return new_dset
+
+
+def spin_permute(map_fslr, neuromaps_dir=None, n_rotate=1):
+
+    atlas = fetch_atlas("fsLR", "32k", data_dir=neuromaps_dir, verbose=0)
+
+    sphere_lh, sphere_rh = atlas["sphere"]
+    coords_lh, _ = nib.load(sphere_lh).agg_data()
+    coords_rh, _ = nib.load(sphere_rh).agg_data()
+
+    medial_lh, medial_rh = atlas["medial"]
+    medial_arr_lh = nib.load(medial_lh).agg_data()
+    medial_arr_rh = nib.load(medial_rh).agg_data()
+
+    coords_lh = coords_lh[np.where(medial_arr_lh != 0)]
+    coords_rh = coords_rh[np.where(medial_arr_rh != 0)]
+
+    hemi = np.hstack((np.zeros((coords_lh.shape[0],)), np.ones((coords_rh.shape[0],))))
+    coords = np.vstack((coords_lh, coords_rh))
+
+    permute = nnstats.gen_spinsamples(
+        coords, hemi, n_rotate=n_rotate, seed=1, method="vasa", check_duplicates=False
+    )
+
+    map_fslr_permuted = map_fslr[permute]
+
+    return map_fslr_permuted

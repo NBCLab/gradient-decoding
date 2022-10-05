@@ -9,18 +9,21 @@ import mapalign
 import nibabel as nib
 import numpy as np
 from brainspace.gradient import GradientMaps
+from neuromaps import transforms
 from nibabel import GiftiImage
 from nibabel.gifti import GiftiDataArray
+from nilearn import image, masking
 from nimare.annotate.gclda import GCLDAModel
 from nimare.dataset import Dataset
 from nimare.decode.continuous import CorrelationDecoder
 from nimare.extract import download_abstracts, fetch_neuroquery, fetch_neurosynth
 from nimare.io import convert_neurosynth_to_dataset
 from nimare.meta.cbma import mkda
+from nimare.stats import pearson
 from surfplot.utils import add_fslr_medial_wall
 
 import utils
-from decoding import _get_counts, annotate_lda
+from decoding import _get_counts, annotate_lda, spin_permute
 from segmentation import (
     KDESegmentation,
     KMeansSegmentation,
@@ -239,18 +242,14 @@ def gradient_segmentation(gradient, grad_seg_fn, n_segments):
 
     # Silhouette measures
     silhouette_df_fn = op.join(output_dir, "silhouette_scores.csv")
-    if not op.isfile(silhouette_df_fn):
-        print("\tCalculating Silhouette measures...", flush=True)
-        compare_segmentations(
-            gradient, percent_labels, kmeans_labels, kde_labels, silhouette_df_fn
-        )
+    # if not op.isfile(silhouette_df_fn):
+    print("\tCalculating Silhouette measures...", flush=True)
+    compare_segmentations(gradient, percent_labels, kmeans_labels, kde_labels, silhouette_df_fn)
 
     return grad_seg_dict
 
 
-def gradient_decoding(
-    data_dir, output_dir, percent_grad_segments, kmeans_grad_segments, kde_grad_segments, n_cores
-):
+def gradient_decoding(data_dir, output_dir, grad_seg_dict, n_cores):
     """3. Meta-Analytic Functional Decoding: Implement six different decoding strategies and
     perform an optimization test to identify the segment size to split the gradient for each
     strategy.
@@ -268,10 +267,12 @@ def gradient_decoding(
     None : :obj:``
     """
     data_dir = op.join(data_dir, "meta-analysis")
+    neuromaps_dir = op.join(data_dir, "neuromaps-data")
     os.makedirs(data_dir, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
 
-    dset_names = ["neurosynth", "neuroquery"]
+    # dset_names = ["neurosynth", "neuroquery"]
+    dset_names = ["neurosynth"]
     for dset_name in dset_names:
         dset_fn = os.path.join(data_dir, f"{dset_name}_dataset.pkl.gz")
         if not os.path.isfile(dset_fn):
@@ -399,6 +400,114 @@ def gradient_decoding(
             gclda_decoder_file = gzip.open(gclda_based_model_fn, "rb")
             gclda_model = pickle.load(gclda_decoder_file)
 
+        # Get meta-analytic maps
+        # term_meta_maps = decoder.masker.inverse_transform(decoder.images_)
+        # lda_meta_maps = decoder.masker.inverse_transform(lda_decoder.images_)
+        sources = ["gclda"]
+        for source in sources:
+            if source == "gclda":
+                meta_maps = masking.unmask(gclda_model.p_voxel_g_topic_.T, gclda_model.mask)
+                n_metamaps = gclda_model.p_voxel_g_topic_.shape[1]
+
+            # TODO: 59412 is harcoded here
+            n_permutations = 1000
+            meta_maps_fslr_arr = np.zeros((n_metamaps, 59412))
+            meta_maps_permuted_arr = np.zeros((n_metamaps, 59412, n_permutations))
+            for metamap_i in range(n_metamaps):
+                fslr_dir = op.join(output_dir, f"{source}-fslr")
+                os.makedirs(fslr_dir, exist_ok=True)
+                meta_map_lh_fn = op.join(
+                    fslr_dir,
+                    "source-{}_desc-topic{:03d}_space-fsLR_den-32k_hemi-L_feature.func.gii".format(
+                        source,
+                        metamap_i + 1,
+                    ),
+                )
+                meta_map_rh_fn = op.join(
+                    fslr_dir,
+                    "source-{}_desc-topic{:03d}_space-fsLR_den-32k_hemi-R_feature.func.gii".format(
+                        source,
+                        metamap_i + 1,
+                    ),
+                )
+
+                if op.isfile(meta_map_lh_fn) and op.isfile(meta_map_rh_fn):
+                    meta_map_lh = nib.load(meta_map_lh_fn)
+                    meta_map_rh = nib.load(meta_map_rh_fn)
+                else:
+                    meta_map = image.index_img(meta_maps, metamap_i)
+                    meta_map_lh, meta_map_rh = transforms.mni152_to_fslr(meta_map)
+
+                    meta_map_lh, meta_map_rh = utils.zero_fslr_medial_wall(
+                        meta_map_lh, meta_map_rh, neuromaps_dir
+                    )
+
+                    # Write cortical gradient to Gifti files
+                    nib.save(meta_map_lh, meta_map_lh_fn)
+                    nib.save(meta_map_rh, meta_map_rh_fn)
+
+                meta_map_arr_lh = meta_map_lh.agg_data()
+                meta_map_arr_rh = meta_map_rh.agg_data()
+
+                meta_map_fslr = utils.rm_fslr_medial_wall(
+                    meta_map_arr_lh, meta_map_arr_rh, neuromaps_dir
+                )
+
+                meta_maps_fslr_arr[metamap_i, :] = meta_map_fslr
+
+                spin_permute_fn = op.join(output_dir, f"{source}_{metamap_i}_spin_permute.npy")
+                if not op.isfile(spin_permute_fn):
+                    meta_maps_permuted_arr[metamap_i, :, :] = spin_permute(
+                        meta_map_fslr, neuromaps_dir, n_rotate=n_permutations
+                    )
+                    np.save(spin_permute_fn, meta_maps_permuted_arr[metamap_i, :, :])
+                else:
+                    meta_maps_permuted_arr[metamap_i, :, :] = np.load(spin_permute_fn)
+
+            # Correlate meta-analytic maps with segmented maps
+            corrs_seg_dict = {}
+            corrs_null_seg_dict = {}
+            for method in ["Percentile", "KMeans", "KDE"]:
+                grad_segments = grad_seg_dict[f"{method.lower()}_grad_segments"]
+
+                corrs_sol_lst = []
+                corrs_null_lst = []
+                n_segmentations = len(grad_segments)
+                for segmentation_i in range(n_segmentations):
+                    n_segments = len(grad_segments[segmentation_i])
+                    corrs_sol_arr = np.zeros((n_segments, n_metamaps))
+                    corrs_null_arr = np.zeros((n_segments, n_metamaps, n_permutations))
+                    for segment_i in range(n_segments):
+                        # for metamap_i in range(n_metamaps):
+                        corrs_sol_arr[segment_i, :] = pearson(
+                            grad_segments[segmentation_i][segment_i], meta_maps_fslr_arr
+                        )
+
+                        # Claculate null correlation coeficients
+                        for perm_i in range(n_permutations):
+                            corrs_null_arr[segment_i, :, perm_i] = pearson(
+                                grad_segments[segmentation_i][segment_i],
+                                meta_maps_permuted_arr[:, :, perm_i],
+                            )
+
+                    corrs_sol_lst.append(corrs_sol_arr)
+                    corrs_null_lst.append(corrs_null_arr)
+
+                corrs_seg_dict[f"{method.lower()}_grad_segments"] = corrs_sol_lst
+                corrs_null_seg_dict[f"{method.lower()}_grad_segments"] = corrs_null_lst
+
+            corrs_seg_fn = op.join(output_dir, f"{source}_corrs_segments.pkl")
+            corrs_null_seg_fn = op.join(output_dir, f"{source}_corrs_null_segments.pkl")
+
+            # Save results
+            corrs_segments_file = open(corrs_seg_fn, "wb")
+            pickle.dump(corrs_seg_dict, corrs_segments_file)
+            corrs_segments_file.close()
+
+            corrs_null_segments_file = open(corrs_null_seg_fn, "wb")
+            pickle.dump(corrs_null_seg_dict, corrs_null_segments_file)
+            corrs_null_segments_file.close()
+
     return None
 
 
@@ -475,18 +584,12 @@ def main(project_dir, n_cores):
         grad_segments_file = open(grad_seg_fn, "rb")
         grad_seg_dict = pickle.load(grad_segments_file)
 
-    percent_grad_segments = grad_seg_dict["percentile_grad_segments"]
-    kmeans_grad_segments = grad_seg_dict["kmeans_grad_segments"]
-    kde_grad_segments = grad_seg_dict["kde_grad_segments"]
-
     # 3. Meta-Analytic Functional Decoding
     print("3. Meta-Analytic Functional Decoding", flush=True)
     gradient_decoding(
         data_dir,
         gradient_decoding_dir,
-        percent_grad_segments,
-        kmeans_grad_segments,
-        kde_grad_segments,
+        grad_seg_dict,
         n_cores,
     )
 
