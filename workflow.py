@@ -23,7 +23,7 @@ from nimare.stats import pearson
 from surfplot.utils import add_fslr_medial_wall
 
 import utils
-from decoding import _get_counts, annotate_lda, spin_permute
+from decoding import _get_counts, annotate_lda, gen_nullsamples
 from segmentation import (
     KDESegmentation,
     KMeansSegmentation,
@@ -271,6 +271,15 @@ def gradient_decoding(data_dir, output_dir, grad_seg_dict, n_cores):
     os.makedirs(data_dir, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
 
+    n_vertices = 59412  # TODO: 59412 is harcoded here
+    n_permutations = 1000
+    nullsamples_fn = op.join(output_dir, "null_samples_fslr.npy")
+    if not op.isfile(nullsamples_fn):
+        nullsamples = gen_nullsamples(neuromaps_dir, n_permutations=n_permutations)
+        np.save(nullsamples_fn, nullsamples)
+    else:
+        nullsamples = np.load(nullsamples_fn)
+
     # dset_names = ["neurosynth", "neuroquery"]
     dset_names = ["neurosynth"]
     for dset_name in dset_names:
@@ -409,10 +418,8 @@ def gradient_decoding(data_dir, output_dir, grad_seg_dict, n_cores):
                 meta_maps = masking.unmask(gclda_model.p_voxel_g_topic_.T, gclda_model.mask)
                 n_metamaps = gclda_model.p_voxel_g_topic_.shape[1]
 
-            # TODO: 59412 is harcoded here
-            n_permutations = 1000
-            meta_maps_fslr_arr = np.zeros((n_metamaps, 59412))
-            meta_maps_permuted_arr = np.zeros((n_metamaps, 59412, n_permutations))
+            meta_maps_fslr_arr = np.zeros((n_metamaps, n_vertices))
+            meta_maps_permuted_arr = np.zeros((n_metamaps, n_vertices, n_permutations))
             for metamap_i in range(n_metamaps):
                 fslr_dir = op.join(output_dir, f"{source}-fslr")
                 os.makedirs(fslr_dir, exist_ok=True)
@@ -454,15 +461,7 @@ def gradient_decoding(data_dir, output_dir, grad_seg_dict, n_cores):
                 )
 
                 meta_maps_fslr_arr[metamap_i, :] = meta_map_fslr
-
-                spin_permute_fn = op.join(output_dir, f"{source}_{metamap_i}_spin_permute.npy")
-                if not op.isfile(spin_permute_fn):
-                    meta_maps_permuted_arr[metamap_i, :, :] = spin_permute(
-                        meta_map_fslr, neuromaps_dir, n_rotate=n_permutations
-                    )
-                    np.save(spin_permute_fn, meta_maps_permuted_arr[metamap_i, :, :])
-                else:
-                    meta_maps_permuted_arr[metamap_i, :, :] = np.load(spin_permute_fn)
+                # meta_maps_permuted_arr = nullsamples
 
             # Correlate meta-analytic maps with segmented maps
             corrs_seg_dict = {}
