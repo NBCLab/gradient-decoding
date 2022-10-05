@@ -5,22 +5,30 @@ import os.path as op
 import pickle
 
 import nibabel as nib
+import numpy as np
 from matplotlib import pyplot as plt
 from neuromaps.datasets import fetch_fslr
-from nilearn import image, plotting
+from nilearn import image, masking, plotting
 from nilearn.plotting import plot_stat_map
 from surfplot import Plot
 from surfplot.utils import threshold
 
 
-def plot_gradient(data_dir, grad_seg_fnames, cmap="viridis", threshold_=None, color_range=None):
+def plot_gradient(
+    data_dir,
+    grad_seg_fnames,
+    cmap="viridis",
+    threshold_=None,
+    color_range=None,
+    out_dir=None,
+):
     neuromaps_dir = op.join(data_dir, "neuromaps-data")
     surfaces = fetch_fslr(density="32k", data_dir=neuromaps_dir)
 
     lh, rh = surfaces["inflated"]
     sulc_lh, sulc_rh = surfaces["sulc"]
 
-    for grad_segment_lh, grad_segment_rh in grad_seg_fnames:
+    for img_i, (grad_segment_lh, grad_segment_rh) in enumerate(grad_seg_fnames):
         lh_grad = nib.load(grad_segment_lh).agg_data()
         rh_grad = nib.load(grad_segment_rh).agg_data()
 
@@ -38,6 +46,11 @@ def plot_gradient(data_dir, grad_seg_fnames, cmap="viridis", threshold_=None, co
         last_name = base_name.split("_")[1].split("-")[1]
         title_ = f"{firts_name}: {last_name}"
         fig.axes[0].set_title(title_, pad=-3)
+
+        if out_dir is not None:
+            out_file = op.join(out_dir, f"{firts_name}_{last_name}.tiff")
+            plt.savefig(out_file, bbox_inches="tight", dpi=1000)
+
         plt.show()
 
 
@@ -58,26 +71,38 @@ def plot_subcortical_gradient(subcort_grad_fnames, cmap="viridis", threshold_=No
         plt.show()
 
 
-def plot_meta_maps(term_based_decoder_fn, n_init=0, n_maps=10, threshold=2):
-    term_decoder_file = gzip.open(term_based_decoder_fn, "rb")
-    term_decoder = pickle.load(term_decoder_file)
-    term_based_meta_maps = term_decoder.images_
-    term_features = [f.split("__")[-1] for f in term_decoder.features_]
+def plot_meta_maps(decoder_fn, n_init=0, n_maps=10, threshold=2, model="decoder"):
+    decoder_file = gzip.open(decoder_fn, "rb")
+    decoder = pickle.load(decoder_file)
+    if model == "decoder":
+        meta_maps = decoder.images_
+        features = [f.split("__")[-1] for f in decoder.features_]
+        meta_maps_imgs = decoder.masker.inverse_transform(meta_maps[n_init : n_init + n_maps, :])
+    elif model == "gclda":
+        topic_word_weights = decoder.p_word_g_topic_
+        n_topics = topic_word_weights.shape[1]
+        vocabulary = np.array(decoder.vocabulary)
+        sorted_weights_idxs = np.argsort(-topic_word_weights, axis=0)
+        top_tokens = [
+            "_".join(vocabulary[sorted_weights_idxs[:, topic_i]][:3])
+            for topic_i in range(n_topics)
+        ]
+        features = [f"{i + 1}_{top_tokens[i]}" for i in range(n_topics)]
+        meta_maps_imgs = masking.unmask(
+            decoder.p_voxel_g_topic_.T[n_init : n_init + n_maps, :], decoder.mask
+        )
 
-    term_meta_maps_imgs = term_decoder.masker.inverse_transform(
-        term_based_meta_maps[n_init : n_init + n_maps, :]
-    )
-    term_features_to_plot = term_features[n_init : n_init + n_maps]
+    features_to_plot = features[n_init : n_init + n_maps]
 
     for i_feature in range(n_maps):
-        feature_img_3d = image.index_img(term_meta_maps_imgs, i_feature)
+        feature_img_3d = image.index_img(meta_maps_imgs, i_feature)
         plotting.plot_stat_map(
             feature_img_3d,
             draw_cross=False,
             colorbar=True,
             annotate=False,
             threshold=threshold,
-            title=term_features_to_plot[i_feature],
+            title=features_to_plot[i_feature],
         )
         plt.show()
 
