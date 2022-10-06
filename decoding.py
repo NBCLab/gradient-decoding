@@ -152,7 +152,7 @@ def annotate_lda(dset, dset_name, data_dir, lda_based_model_fn, n_topics=200, n_
     return new_dset
 
 
-def gen_nullsamples(neuromaps_dir=None, n_rotate=1):
+def gen_nullsamples(neuromaps_dir=None, n_samples=1):
 
     atlas = fetch_atlas("fsLR", "32k", data_dir=neuromaps_dir, verbose=0)
 
@@ -173,7 +173,7 @@ def gen_nullsamples(neuromaps_dir=None, n_rotate=1):
     nullsamples = nnstats.gen_spinsamples(
         coords,
         hemi,
-        n_rotate=n_rotate,
+        n_rotate=n_samples,
         seed=1,
         method="vasa",
         check_duplicates=False,
