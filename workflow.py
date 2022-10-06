@@ -266,16 +266,16 @@ def gradient_decoding(data_dir, output_dir, grad_seg_dict, n_cores):
     -------
     None : :obj:``
     """
-    data_dir = op.join(data_dir, "meta-analysis")
     neuromaps_dir = op.join(data_dir, "neuromaps-data")
+    data_dir = op.join(data_dir, "meta-analysis")
     os.makedirs(data_dir, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
 
     n_vertices = 59412  # TODO: 59412 is harcoded here
-    n_permutations = 1000
+    n_permutations = 2
     nullsamples_fn = op.join(output_dir, "null_samples_fslr.npy")
     if not op.isfile(nullsamples_fn):
-        nullsamples = gen_nullsamples(neuromaps_dir, n_permutations=n_permutations)
+        nullsamples = gen_nullsamples(neuromaps_dir, n_samples=n_permutations)
         np.save(nullsamples_fn, nullsamples)
     else:
         nullsamples = np.load(nullsamples_fn)
