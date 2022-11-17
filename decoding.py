@@ -5,6 +5,7 @@ from glob import glob
 import nibabel as nib
 import numpy as np
 import pandas as pd
+from joblib import Parallel, delayed
 from netneurotools import stats as nnstats
 from neuromaps.datasets import fetch_atlas
 from nimare.annotate.lda import LDAModel
@@ -152,7 +153,20 @@ def annotate_lda(dset, dset_name, data_dir, lda_based_model_fn, n_topics=200, n_
     return new_dset
 
 
-def gen_nullsamples(neuromaps_dir=None, n_samples=1):
+def _gen_spinsamples(coords, hemi, seed):
+    null_sample = nnstats.gen_spinsamples(
+        coords,
+        hemi,
+        n_rotate=1,
+        seed=seed,
+        method="vasa",
+        check_duplicates=True,
+        verbose=True,
+    )
+    return null_sample
+
+
+def gen_nullsamples(neuromaps_dir=None, n_samples=1, n_cores=1):
 
     atlas = fetch_atlas("fsLR", "32k", data_dir=neuromaps_dir, verbose=0)
 
@@ -170,14 +184,10 @@ def gen_nullsamples(neuromaps_dir=None, n_samples=1):
     hemi = np.hstack((np.zeros((coords_lh.shape[0],)), np.ones((coords_rh.shape[0],))))
     coords = np.vstack((coords_lh, coords_rh))
 
-    nullsamples = nnstats.gen_spinsamples(
-        coords,
-        hemi,
-        n_rotate=n_samples,
-        seed=1,
-        method="vasa",
-        check_duplicates=False,
-        verbose=True,
+    results = Parallel(n_jobs=n_cores, max_nbytes=None, verbose=20)(
+        delayed(_gen_spinsamples)(coords, hemi, seed) for seed in range(n_samples)
     )
 
-    return nullsamples
+    null_samples = np.hstack(results)
+
+    return null_samples

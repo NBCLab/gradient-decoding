@@ -1,9 +1,8 @@
 #!/bin/bash
-#SBATCH --job-name=workflow
+#SBATCH --job-name=workflow-NS-LDA-PCT
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=20
-#SBATCH --mem-per-cpu=12gb
+#SBATCH --cpus-per-task=1
 #SBATCH --account=iacc_nbc
 #SBATCH --qos=pq_nbc
 #SBATCH --partition=IB_40C_512G
@@ -12,7 +11,7 @@
 #SBATCH --error=log/%x_%j.err
 # ------------------------------------------
 
-# IB_40C_512G, for running workflow
+# IB_44C_512G, IB_40C_512G, IB_16C_96G, for running workflow
 # investor, for testing
 pwd; hostname; date
 

@@ -12,7 +12,7 @@ from brainspace.gradient import GradientMaps
 from neuromaps import transforms
 from nibabel import GiftiImage
 from nibabel.gifti import GiftiDataArray
-from nilearn import image, masking
+from nilearn import masking
 from nimare.annotate.gclda import GCLDAModel
 from nimare.dataset import Dataset
 from nimare.decode.continuous import CorrelationDecoder
@@ -267,28 +267,33 @@ def gradient_decoding(data_dir, output_dir, grad_seg_dict, n_cores):
     None : :obj:``
     """
     neuromaps_dir = op.join(data_dir, "neuromaps-data")
-    data_dir = op.join(data_dir, "meta-analysis")
-    os.makedirs(data_dir, exist_ok=True)
+    ma_data_dir = op.join(data_dir, "meta-analysis")
+    os.makedirs(ma_data_dir, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
 
     n_vertices = 59412  # TODO: 59412 is harcoded here
-    n_permutations = 2
+    n_permutations = 1000
+    n_topics = 200
     nullsamples_fn = op.join(output_dir, "null_samples_fslr.npy")
     if not op.isfile(nullsamples_fn):
-        nullsamples = gen_nullsamples(neuromaps_dir, n_samples=n_permutations)
+        nullsamples = gen_nullsamples(neuromaps_dir, n_samples=n_permutations, n_cores=n_cores)
         np.save(nullsamples_fn, nullsamples)
     else:
         nullsamples = np.load(nullsamples_fn)
 
     # dset_names = ["neurosynth", "neuroquery"]
+    # sources = ["term", "lda", "gclda"]
+    # methods = ["Percentile", "KMeans", "KDE"]
     dset_names = ["neurosynth"]
+    sources = ["lda"]
+    methods = ["Percentile"]
     for dset_name in dset_names:
-        dset_fn = os.path.join(data_dir, f"{dset_name}_dataset.pkl.gz")
+        dset_fn = os.path.join(ma_data_dir, f"{dset_name}_dataset.pkl.gz")
         if not os.path.isfile(dset_fn):
             print(f"\tFetching {dset_name} database...", flush=True)
             if dset_name == "neurosynth":
                 files = fetch_neurosynth(
-                    data_dir=data_dir,
+                    data_dir=ma_data_dir,
                     version="7",
                     overwrite=False,
                     source="abstract",
@@ -330,182 +335,271 @@ def gradient_decoding(data_dir, output_dir, grad_seg_dict, n_cores):
             pass
 
         if dset.basepath is None:
-            basepath_path = op.join(data_dir, f"{dset_name}_basepath")
+            basepath_path = op.join(ma_data_dir, f"{dset_name}_basepath")
             os.makedirs(basepath_path, exist_ok=True)
             dset.update_path(basepath_path)
 
-        # Term-based meta-analysis
-        if dset_name == "neurosynth":
-            feature_group = "terms_abstract_tfidf"
-        elif dset_name == "neuroquery":
-            feature_group = "neuroquery6308_combined_tfidf"
-
-        term_based_decoder_fn = op.join(output_dir, f"term-based_{dset_name}_decoder.pkl.gz")
-        if not op.isfile(term_based_decoder_fn):
-            print(f"\tPerforming Term-based meta-analysis on {dset_name}...", flush=True)
-            decoder = CorrelationDecoder(
-                frequency_threshold=0.001,
-                meta_estimator=mkda.MKDAChi2,
-                feature_group=feature_group,
-                target_image="z_desc-specificity",
-                n_cores=n_cores,
-            )
-            decoder.fit(dset)
-            decoder.save(term_based_decoder_fn, compress=True)
-        else:
-            print(f"\tLoading Term-based meta-analytic maps from {dset_name}...", flush=True)
-            decoder_file = gzip.open(term_based_decoder_fn, "rb")
-            decoder = pickle.load(decoder_file)
-
-        # LDA-based meta-analysis
-        n_topics = 200
-        feature_group = f"LDA{n_topics}"
-        lda_based_decoder_fn = op.join(output_dir, f"lda-based_{dset_name}_decoder.pkl.gz")
-        if not op.isfile(lda_based_decoder_fn):
-            print(f"\tRunning LDA model on {dset_name}...", flush=True)
-            # n_cores=1 for LDA. See: https://github.com/scikit-learn/scikit-learn/issues/8943
-            new_dset_fn = dset_fn.split("_dataset.pkl.gz")[0] + "_lda_dataset.pkl.gz"
-            if not op.isfile(new_dset_fn):
-                lda_based_model_fn = op.join(output_dir, f"lda_{dset_name}_model.pkl.gz")
-                dset = annotate_lda(
-                    dset, dset_name, data_dir, lda_based_model_fn, n_topics=n_topics, n_cores=1
-                )
-                dset.save(new_dset_fn)
-            else:
-                dset = Dataset.load(new_dset_fn)
-
-            print(f"\tPerforming LDA-based meta-analysis on {dset_name}...", flush=True)
-            lda_decoder = CorrelationDecoder(
-                frequency_threshold=0.05,
-                meta_estimator=mkda.MKDAChi2,
-                feature_group=feature_group,
-                target_image="z_desc-specificity",
-                n_cores=n_cores,
-            )
-            lda_decoder.fit(dset)
-            lda_decoder.save(lda_based_decoder_fn, compress=True)
-        else:
-            print(f"\tLoading LDA-based meta-analytic maps from {dset_name}...", flush=True)
-            lda_decoder_file = gzip.open(lda_based_decoder_fn, "rb")
-            lda_decoder = pickle.load(lda_decoder_file)
-
-        # GCLDA-based meta-analysis
-        gclda_based_model_fn = op.join(output_dir, f"gclda_{dset_name}_model.pkl.gz")
-        if not op.isfile(gclda_based_model_fn):
-            print(f"\tRunning GCLDA model on {dset_name}...", flush=True)
-            counts_df = _get_counts(dset, dset_name, data_dir)
-            gclda_model = GCLDAModel(
-                counts_df,
-                dset.coordinates,
-                mask=dset.masker.mask_img,
-                n_topics=n_topics,
-                n_regions=4,
-                symmetric=True,
-            )
-            gclda_model.fit(n_iters=20000, loglikely_freq=20)
-            gclda_model.save(gclda_based_model_fn, compress=True)
-        else:
-            print(f"\tLoading GCLDA-based meta-analytic maps from {dset_name}...", flush=True)
-            gclda_decoder_file = gzip.open(gclda_based_model_fn, "rb")
-            gclda_model = pickle.load(gclda_decoder_file)
-
-        # Get meta-analytic maps
-        # term_meta_maps = decoder.masker.inverse_transform(decoder.images_)
-        # lda_meta_maps = decoder.masker.inverse_transform(lda_decoder.images_)
-        sources = ["gclda"]
         for source in sources:
-            if source == "gclda":
-                meta_maps = masking.unmask(gclda_model.p_voxel_g_topic_.T, gclda_model.mask)
-                n_metamaps = gclda_model.p_voxel_g_topic_.shape[1]
+            if source == "term":
+                # Term-based meta-analysis
+                if dset_name == "neurosynth":
+                    feature_group = "terms_abstract_tfidf"
+                elif dset_name == "neuroquery":
+                    feature_group = "neuroquery6308_combined_tfidf"
+                frequency_threshold = 0.001
 
-            meta_maps_fslr_arr = np.zeros((n_metamaps, n_vertices))
-            meta_maps_permuted_arr = np.zeros((n_metamaps, n_vertices, n_permutations))
-            for metamap_i in range(n_metamaps):
-                fslr_dir = op.join(output_dir, f"{source}-fslr")
-                os.makedirs(fslr_dir, exist_ok=True)
-                meta_map_lh_fn = op.join(
-                    fslr_dir,
-                    "source-{}_desc-topic{:03d}_space-fsLR_den-32k_hemi-L_feature.func.gii".format(
-                        source,
-                        metamap_i + 1,
-                    ),
-                )
-                meta_map_rh_fn = op.join(
-                    fslr_dir,
-                    "source-{}_desc-topic{:03d}_space-fsLR_den-32k_hemi-R_feature.func.gii".format(
-                        source,
-                        metamap_i + 1,
-                    ),
-                )
+            if source == "lda":
+                # LDA-based meta-analysis
+                feature_group = f"LDA{n_topics}"
+                frequency_threshold = 0.05
 
-                if op.isfile(meta_map_lh_fn) and op.isfile(meta_map_rh_fn):
-                    meta_map_lh = nib.load(meta_map_lh_fn)
-                    meta_map_rh = nib.load(meta_map_rh_fn)
+            if (source == "term") or (source == "lda"):
+                decoder_fn = op.join(output_dir, f"{source}_{dset_name}_decoder.pkl.gz")
+                if not op.isfile(decoder_fn):
+                    if source == "lda":
+                        print(f"\tRunning LDA model on {dset_name}...", flush=True)
+                        # n_cores=1 for LDA.
+                        # See: https://github.com/scikit-learn/scikit-learn/issues/8943
+                        new_dset_fn = dset_fn.split("_dataset.pkl.gz")[0] + "_lda_dataset.pkl.gz"
+                        if not op.isfile(new_dset_fn):
+                            lda_based_model_fn = op.join(
+                                output_dir, f"lda_{dset_name}_model.pkl.gz"
+                            )
+                            dset = annotate_lda(
+                                dset,
+                                dset_name,
+                                ma_data_dir,
+                                lda_based_model_fn,
+                                n_topics=n_topics,
+                                n_cores=1,
+                            )
+                            dset.save(new_dset_fn)
+                        else:
+                            dset = Dataset.load(new_dset_fn)
+
+                    print(
+                        f"\tPerforming {source.upper()}-based meta-analysis on {dset_name}...",
+                        flush=True,
+                    )
+                    decoder = CorrelationDecoder(
+                        frequency_threshold=frequency_threshold,
+                        meta_estimator=mkda.MKDAChi2,
+                        feature_group=feature_group,
+                        target_image="z_desc-specificity",
+                        n_cores=n_cores,
+                    )
+                    decoder.fit(dset)
+                    decoder.save(decoder_fn, compress=True)
                 else:
-                    meta_map = image.index_img(meta_maps, metamap_i)
-                    meta_map_lh, meta_map_rh = transforms.mni152_to_fslr(meta_map)
+                    print(
+                        f"\tLoading {source.upper()}-based meta-analytic maps from {dset_name}...",
+                        flush=True,
+                    )
+                    decoder_file = gzip.open(decoder_fn, "rb")
+                    decoder = pickle.load(decoder_file)
 
-                    meta_map_lh, meta_map_rh = utils.zero_fslr_medial_wall(
-                        meta_map_lh, meta_map_rh, neuromaps_dir
+            elif source == "gclda":
+                # GCLDA-based meta-analysis
+                n_iters = 20000
+                gclda_based_model_fn = op.join(output_dir, f"gclda_{dset_name}_model.pkl.gz")
+                if not op.isfile(gclda_based_model_fn):
+                    print(f"\tRunning GCLDA model on {dset_name}...", flush=True)
+                    counts_df = _get_counts(dset, dset_name, ma_data_dir)
+                    gclda_model = GCLDAModel(
+                        counts_df,
+                        dset.coordinates,
+                        mask=dset.masker.mask_img,
+                        n_topics=n_topics,
+                        n_regions=4,
+                        symmetric=True,
+                        n_cores=n_cores,
+                    )
+                    gclda_model.fit(n_iters=n_iters, loglikely_freq=100)
+                    gclda_model.save(gclda_based_model_fn, compress=True)
+                else:
+                    print(
+                        f"\tLoading GCLDA-based meta-analytic maps from {dset_name}...", flush=True
+                    )
+                    gclda_decoder_file = gzip.open(gclda_based_model_fn, "rb")
+                    gclda_model = pickle.load(gclda_decoder_file)
+
+            # Get meta-analytic maps
+            if (source == "term") or (source == "lda"):
+                meta_arr = decoder.images_
+            elif source == "gclda":
+                meta_arr = gclda_model.p_voxel_g_topic_.T
+
+            n_metamaps = meta_arr.shape[0]
+            meta_map_fn = op.join(output_dir, f"{source}_{dset_name}_metamaps.npy")
+            meta_null_fn = op.join(output_dir, f"{source}_{dset_name}_metamaps-nulls.npy")
+            if op.isfile(meta_map_fn) and op.isfile(meta_null_fn):
+                print("\tLoading meta-analytic and null maps...", flush=True)
+                meta_maps_fslr_arr = np.load(meta_map_fn)
+                if n_metamaps > 200:
+                    meta_maps_permuted_arr = np.memmap(
+                        meta_null_fn,
+                        dtype="float32",
+                        mode="r",
+                        shape=(n_metamaps, n_vertices, n_permutations),
+                    )
+                else:
+                    meta_maps_permuted_arr = np.load(meta_null_fn)
+            else:
+                print("\tTransforming meta-analytic and null maps to fsLR...", flush=True)
+                meta_maps_fslr_arr = np.zeros((n_metamaps, n_vertices))
+                if n_metamaps > 200:
+                    meta_maps_permuted_arr = np.memmap(
+                        meta_null_fn,
+                        dtype="float32",
+                        mode="w+",
+                        shape=(n_metamaps, n_vertices, n_permutations),
+                    )
+                else:
+                    meta_maps_permuted_arr = np.zeros((n_metamaps, n_vertices, n_permutations))
+
+                for metamap_i in range(n_metamaps):
+                    fslr_dir = op.join(output_dir, f"{source}_{dset_name}_fslr")
+                    os.makedirs(fslr_dir, exist_ok=True)
+
+                    if (source == "gclda") or (source == "lda"):
+                        desc_name = "desc-topic{:03d}".format(metamap_i + 1)
+                    elif source == "term":
+                        desc_name = "desc-term{:04d}".format(metamap_i + 1)
+
+                    meta_map_lh_fn = op.join(
+                        fslr_dir,
+                        f"source-{source}_dset-{dset_name}_{desc_name}_space-fsLR_den-32k_hemi-L_feature.func.gii",
+                    )
+                    meta_map_rh_fn = op.join(
+                        fslr_dir,
+                        f"source-{source}_dset-{dset_name}_{desc_name}_space-fsLR_den-32k_hemi-R_feature.func.gii",
                     )
 
-                    # Write cortical gradient to Gifti files
-                    nib.save(meta_map_lh, meta_map_lh_fn)
-                    nib.save(meta_map_rh, meta_map_rh_fn)
+                    if op.isfile(meta_map_lh_fn) and op.isfile(meta_map_rh_fn):
+                        meta_map_lh = nib.load(meta_map_lh_fn)
+                        meta_map_rh = nib.load(meta_map_rh_fn)
+                    else:
+                        if (source == "term") or (source == "lda"):
+                            meta_map = decoder.masker.inverse_transform(meta_arr[metamap_i, :])
+                        elif source == "gclda":
+                            meta_map = masking.unmask(meta_arr[metamap_i, :], gclda_model.mask)
 
-                meta_map_arr_lh = meta_map_lh.agg_data()
-                meta_map_arr_rh = meta_map_rh.agg_data()
+                        meta_map_lh, meta_map_rh = transforms.mni152_to_fslr(meta_map)
 
-                meta_map_fslr = utils.rm_fslr_medial_wall(
-                    meta_map_arr_lh, meta_map_arr_rh, neuromaps_dir
+                        meta_map_lh, meta_map_rh = utils.zero_fslr_medial_wall(
+                            meta_map_lh, meta_map_rh, neuromaps_dir
+                        )
+
+                        # Write cortical gradient to Gifti files
+                        nib.save(meta_map_lh, meta_map_lh_fn)
+                        nib.save(meta_map_rh, meta_map_rh_fn)
+
+                        del meta_map
+
+                    meta_map_arr_lh = meta_map_lh.agg_data()
+                    meta_map_arr_rh = meta_map_rh.agg_data()
+
+                    meta_map_fslr = utils.rm_fslr_medial_wall(
+                        meta_map_arr_lh, meta_map_arr_rh, neuromaps_dir
+                    )
+
+                    meta_maps_fslr_arr[metamap_i, :] = meta_map_fslr
+                    meta_maps_permuted_arr[metamap_i, :, :] = meta_map_fslr[nullsamples]
+
+                np.save(meta_map_fn, meta_maps_fslr_arr)
+                if n_metamaps <= 200:
+                    np.save(meta_null_fn, meta_maps_permuted_arr)
+
+                del (
+                    meta_arr,
+                    meta_map_fslr,
+                    nullsamples,
+                    meta_map_arr_lh,
+                    meta_map_arr_rh,
+                    meta_map_lh,
+                    meta_map_rh,
                 )
 
-                meta_maps_fslr_arr[metamap_i, :] = meta_map_fslr
-                # meta_maps_permuted_arr = nullsamples
+            if (source == "term") or (source == "lda"):
+                del decoder
+            elif source == "gclda":
+                del gclda_model
+
+            null_dir = op.join(output_dir, f"{source}_{dset_name}_null")
+            os.makedirs(null_dir, exist_ok=True)
+            for perm_i in range(n_permutations):
+                meta_null_i_fn = op.join(
+                    null_dir, "{}_{}_metanull-{:04d}.npy".format(source, dset_name, perm_i + 1)
+                )
+                if not op.isfile(meta_null_i_fn):
+                    np.save(meta_null_i_fn, meta_maps_permuted_arr[:, :, perm_i])
+
+            print(meta_maps_fslr_arr.shape, flush=True)
+            print(meta_maps_permuted_arr.shape, flush=True)
+            del meta_maps_permuted_arr
 
             # Correlate meta-analytic maps with segmented maps
-            corrs_seg_dict = {}
-            corrs_null_seg_dict = {}
-            for method in ["Percentile", "KMeans", "KDE"]:
+            for method in methods:
+                corr_dir = op.join(output_dir, f"{source}_{dset_name}_corr_{method}")
+                os.makedirs(corr_dir, exist_ok=True)
+
                 grad_segments = grad_seg_dict[f"{method.lower()}_grad_segments"]
 
-                corrs_sol_lst = []
-                corrs_null_lst = []
                 n_segmentations = len(grad_segments)
                 for segmentation_i in range(n_segmentations):
                     n_segments = len(grad_segments[segmentation_i])
-                    corrs_sol_arr = np.zeros((n_segments, n_metamaps))
-                    corrs_null_arr = np.zeros((n_segments, n_metamaps, n_permutations))
-                    for segment_i in range(n_segments):
-                        # for metamap_i in range(n_metamaps):
-                        corrs_sol_arr[segment_i, :] = pearson(
-                            grad_segments[segmentation_i][segment_i], meta_maps_fslr_arr
-                        )
 
-                        # Claculate null correlation coeficients
-                        for perm_i in range(n_permutations):
-                            corrs_null_arr[segment_i, :, perm_i] = pearson(
-                                grad_segments[segmentation_i][segment_i],
-                                meta_maps_permuted_arr[:, :, perm_i],
+                    corrs_sol_fn = op.join(corr_dir, "{:02d}_corr.npy".format(segmentation_i + 3))
+                    corrs_null_fn = op.join(corr_dir, "{:02d}_null.npy".format(segmentation_i + 3))
+                    corrs_pval_fn = op.join(corr_dir, "{:02d}_pval.npy".format(segmentation_i + 3))
+
+                    if op.isfile(corrs_sol_fn) and op.isfile(corrs_null_fn):
+                        corrs_sol_arr = np.load(corrs_sol_fn)
+                        corrs_null_arr = np.load(corrs_null_fn)
+                    else:
+                        corrs_sol_arr = np.zeros((n_segments, n_metamaps))
+                        corrs_null_arr = np.zeros((n_segments, n_metamaps, n_permutations))
+                        for segment_i in range(n_segments):
+                            print(method, segmentation_i, segment_i, flush=True)
+                            corrs_sol_arr[segment_i, :] = pearson(
+                                grad_segments[segmentation_i][segment_i], meta_maps_fslr_arr
                             )
 
-                    corrs_sol_lst.append(corrs_sol_arr)
-                    corrs_null_lst.append(corrs_null_arr)
+                            # Claculate null correlation coeficients
+                            for perm_i in range(n_permutations):
+                                meta_null_i_fn = op.join(
+                                    null_dir,
+                                    "{}_{}_metanull-{:04d}.npy".format(
+                                        source, dset_name, perm_i + 1
+                                    ),
+                                )
+                                meta_null_arr_i = np.load(meta_null_i_fn)
 
-                corrs_seg_dict[f"{method.lower()}_grad_segments"] = corrs_sol_lst
-                corrs_null_seg_dict[f"{method.lower()}_grad_segments"] = corrs_null_lst
+                                corrs_null_arr[segment_i, :, perm_i] = pearson(
+                                    grad_segments[segmentation_i][segment_i],
+                                    meta_null_arr_i,
+                                )
 
-            corrs_seg_fn = op.join(output_dir, f"{source}_corrs_segments.pkl")
-            corrs_null_seg_fn = op.join(output_dir, f"{source}_corrs_null_segments.pkl")
+                        np.save(corrs_sol_fn, corrs_sol_arr)
+                        np.save(corrs_null_fn, corrs_null_arr)
 
-            # Save results
-            corrs_segments_file = open(corrs_seg_fn, "wb")
-            pickle.dump(corrs_seg_dict, corrs_segments_file)
-            corrs_segments_file.close()
+                    if not op.isfile(corrs_pval_fn):
+                        corrs_pval_arr = np.zeros((n_segments, n_metamaps))
+                        # Calculate p-value of correlations
+                        for segment_i in range(n_segments):
+                            for metamap_i in range(n_metamaps):
+                                true_corr = corrs_sol_arr[segment_i, metamap_i]
+                                null_corr = corrs_null_arr[segment_i, metamap_i, :]
 
-            corrs_null_segments_file = open(corrs_null_seg_fn, "wb")
-            pickle.dump(corrs_null_seg_dict, corrs_null_segments_file)
-            corrs_null_segments_file.close()
+                                if true_corr > 0:
+                                    summation = null_corr[null_corr > true_corr].sum()
+                                else:
+                                    summation = null_corr[null_corr < true_corr].sum()
+
+                                p_value = abs(summation / n_permutations)
+                                corrs_pval_arr[segment_i, metamap_i] = p_value
+
+                        np.save(corrs_pval_fn, corrs_pval_arr)
 
     return None
 
