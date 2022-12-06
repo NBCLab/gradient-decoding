@@ -285,7 +285,7 @@ def gradient_decoding(data_dir, output_dir, grad_seg_dict, n_cores):
     # sources = ["term", "lda", "gclda"]
     # methods = ["Percentile", "KMeans", "KDE"]
     dset_names = ["neurosynth"]
-    sources = ["lda"]
+    sources = ["term"]
     methods = ["Percentile"]
     for dset_name in dset_names:
         dset_fn = os.path.join(ma_data_dir, f"{dset_name}_dataset.pkl.gz")
@@ -400,10 +400,10 @@ def gradient_decoding(data_dir, output_dir, grad_seg_dict, n_cores):
 
             elif source == "gclda":
                 # GCLDA-based meta-analysis
-                n_iters = 20000
                 gclda_based_model_fn = op.join(output_dir, f"gclda_{dset_name}_model.pkl.gz")
                 if not op.isfile(gclda_based_model_fn):
                     print(f"\tRunning GCLDA model on {dset_name}...", flush=True)
+                    n_iters = 20000
                     counts_df = _get_counts(dset, dset_name, ma_data_dir)
                     gclda_model = GCLDAModel(
                         counts_df,
@@ -458,6 +458,7 @@ def gradient_decoding(data_dir, output_dir, grad_seg_dict, n_cores):
                     meta_maps_permuted_arr = np.zeros((n_metamaps, n_vertices, n_permutations))
 
                 for metamap_i in range(n_metamaps):
+                    print(metamap_i, flush=True)
                     fslr_dir = op.join(output_dir, f"{source}_{dset_name}_fslr")
                     os.makedirs(fslr_dir, exist_ok=True)
 
@@ -507,7 +508,9 @@ def gradient_decoding(data_dir, output_dir, grad_seg_dict, n_cores):
                     meta_maps_permuted_arr[metamap_i, :, :] = meta_map_fslr[nullsamples]
 
                 np.save(meta_map_fn, meta_maps_fslr_arr)
-                if n_metamaps <= 200:
+                if n_metamaps > 200:
+                    meta_maps_permuted_arr.flush()
+                else:
                     np.save(meta_null_fn, meta_maps_permuted_arr)
 
                 del (
