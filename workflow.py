@@ -281,12 +281,9 @@ def gradient_decoding(data_dir, output_dir, grad_seg_dict, n_cores):
     else:
         nullsamples = np.load(nullsamples_fn)
 
-    # dset_names = ["neurosynth", "neuroquery"]
-    # sources = ["term", "lda", "gclda"]
-    # methods = ["Percentile", "KMeans", "KDE"]
-    dset_names = ["neurosynth"]
-    sources = ["term"]
-    methods = ["Percentile"]
+    dset_names = ["neurosynth", "neuroquery"]
+    sources = ["term", "lda", "gclda"]
+    methods = ["Percentile", "KMeans", "KDE"]
     for dset_name in dset_names:
         dset_fn = os.path.join(ma_data_dir, f"{dset_name}_dataset.pkl.gz")
         if not os.path.isfile(dset_fn):
@@ -458,7 +455,7 @@ def gradient_decoding(data_dir, output_dir, grad_seg_dict, n_cores):
                     meta_maps_permuted_arr = np.zeros((n_metamaps, n_vertices, n_permutations))
 
                 for metamap_i in range(n_metamaps):
-                    print(metamap_i, flush=True)
+
                     fslr_dir = op.join(output_dir, f"{source}_{dset_name}_fslr")
                     os.makedirs(fslr_dir, exist_ok=True)
 
@@ -469,11 +466,13 @@ def gradient_decoding(data_dir, output_dir, grad_seg_dict, n_cores):
 
                     meta_map_lh_fn = op.join(
                         fslr_dir,
-                        f"source-{source}_dset-{dset_name}_{desc_name}_space-fsLR_den-32k_hemi-L_feature.func.gii",
+                        f"source-{source}_dset-{dset_name}_{desc_name}"
+                        "_space-fsLR_den-32k_hemi-L_feature.func.gii",
                     )
                     meta_map_rh_fn = op.join(
                         fslr_dir,
-                        f"source-{source}_dset-{dset_name}_{desc_name}_space-fsLR_den-32k_hemi-R_feature.func.gii",
+                        f"source-{source}_dset-{dset_name}_{desc_name}"
+                        "_space-fsLR_den-32k_hemi-R_feature.func.gii",
                     )
 
                     if op.isfile(meta_map_lh_fn) and op.isfile(meta_map_rh_fn):
@@ -537,8 +536,6 @@ def gradient_decoding(data_dir, output_dir, grad_seg_dict, n_cores):
                 if not op.isfile(meta_null_i_fn):
                     np.save(meta_null_i_fn, meta_maps_permuted_arr[:, :, perm_i])
 
-            print(meta_maps_fslr_arr.shape, flush=True)
-            print(meta_maps_permuted_arr.shape, flush=True)
             del meta_maps_permuted_arr
 
             # Correlate meta-analytic maps with segmented maps
@@ -563,7 +560,6 @@ def gradient_decoding(data_dir, output_dir, grad_seg_dict, n_cores):
                         corrs_sol_arr = np.zeros((n_segments, n_metamaps))
                         corrs_null_arr = np.zeros((n_segments, n_metamaps, n_permutations))
                         for segment_i in range(n_segments):
-                            print(method, segmentation_i, segment_i, flush=True)
                             corrs_sol_arr[segment_i, :] = pearson(
                                 grad_segments[segmentation_i][segment_i], meta_maps_fslr_arr
                             )
