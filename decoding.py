@@ -107,7 +107,8 @@ def _get_counts(dset, dset_name, data_dir):
                 counts_sparse = counts_sparse + load_npz(counts_arr_fn)
         counts_arr = counts_sparse.todense()
 
-        ids = dset.annotations["id"].tolist()
+        # Generate the IDs from original id list (without sorting)
+        ids = dset.annotations.sort_index()["id"].tolist()
         feature_group = "neuroquery6308_combined_tfidf"
         feature_names = dset.annotations.columns.values
         feature_names = [f for f in feature_names if f.startswith(feature_group)]
@@ -115,6 +116,8 @@ def _get_counts(dset, dset_name, data_dir):
 
         counts_df = pd.DataFrame(counts_arr, columns=vocabulary, index=ids)
         counts_df.index.name = "id"
+        # Sorting by id to match the sorting perform in NiMARE Dataset
+        counts_df = counts_df.sort_index()
 
     return counts_df
 
