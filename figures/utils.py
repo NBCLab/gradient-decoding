@@ -17,6 +17,7 @@ from surfplot.utils import threshold
 def plot_gradient(
     data_dir,
     grad_seg_fnames,
+    grad_seg_labels=None,
     cmap="viridis",
     threshold_=None,
     color_range=None,
@@ -41,10 +42,13 @@ def plot_gradient(
         p.add_layer({"left": lh_grad, "right": rh_grad}, cmap=cmap, color_range=color_range)
 
         fig = p.build()
-        base_name = op.basename(grad_segment_lh)
-        firts_name = base_name.split("_")[0].split("-")[1]
-        last_name = base_name.split("_")[1].split("-")[1]
-        title_ = f"{firts_name}: {last_name}"
+        if grad_seg_labels is None:
+            base_name = op.basename(grad_segment_lh)
+            firts_name = base_name.split("_")[0].split("-")[1]
+            last_name = base_name.split("_")[1].split("-")[1]
+            title_ = f"{firts_name}: {last_name}"
+        else:
+            title_ = grad_seg_labels[img_i]
         fig.axes[0].set_title(title_, pad=-3)
 
         if out_dir is not None:
