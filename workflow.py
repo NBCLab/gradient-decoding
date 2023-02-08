@@ -26,7 +26,7 @@ from surfplot.utils import add_fslr_medial_wall
 
 import utils
 from decoding import _get_counts, annotate_lda, gen_nullsamples
-from performance import classifier
+from performance import _get_semantic_similarity, classifier
 from segmentation import (
     KDESegmentation,
     KMeansSegmentation,
@@ -636,10 +636,10 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
 
     methods = ["Percentile", "KMeans", "KDE"]
     dset_names = ["neurosynth", "neuroquery"]
-    # models = ["lda", "gclda"]
+    # models = ["term", "lda", "gclda"]
     # methods = ["Percentile"]
     # dset_names = ["neuroquery"]
-    models = ["term"]
+    models = ["term", "lda"]
     max_corr_lst = []
     idx_lst = []
     feature_lst = []
@@ -653,6 +653,12 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
     for dset_name in dset_names:
         dset_fn = os.path.join(ma_data_dir, f"{dset_name}_dataset.pkl.gz")
         dset = Dataset.load(dset_fn)
+
+        if dset_name == "neurosynth":
+            feature_group = "terms_abstract_tfidf"
+        elif dset_name == "neuroquery":
+            feature_group = "neuroquery6308_combined_tfidf"
+        frequency_threshold = 0.001
 
         counts_df_fn = op.join(dec_data_dir, f"{dset_name}_counts.tsv")
         ic_df_fn = op.join(dec_data_dir, f"{dset_name}_ic.tsv")
@@ -701,7 +707,6 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
                 ]
                 features = [f"{i + 1}_{feature_names[i]}" for i in range(n_topics)]
 
-            feature_names = np.array(feature_names)
             features_arr = np.array(features)
             features_classified = classifier(features_arr, dset, model, dset_name, class_data_dir)
 
@@ -720,24 +725,43 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
                     max_corr = corr_arr[np.arange(corr_arr.shape[0]), max_idx]
                     max_pval = pval_arr[np.arange(pval_arr.shape[0]), max_idx]
                     max_features = features_arr[max_idx]
-                    max_feature_names = feature_names[max_idx]
                     max_feature_clss = features_classified[max_idx]
                     n_seg = max_corr.shape[0]
                     segments = np.arange(1, n_seg + 1)
                     # segments = segments/segments.max()
                     if model == "term":
-                        for max_feature, max_feature_name, max_feature_cl in zip(
-                            max_features, max_feature_names, max_feature_clss
-                        ):
-                            include_rows = tfidf_df[max_feature_name] >= 0.001
-                            include_ic = ic_df[max_feature][include_rows]
-                            include_tfidf = tfidf_df[max_feature_name][include_rows]
+                        for max_feature, max_feature_cl in zip(max_features, max_feature_clss):
+                            max_feature_lb = f"{feature_group}__{max_feature}"
+                            ic, tfidf = _get_semantic_similarity(
+                                ic_df, tfidf_df, max_feature, max_feature_lb, frequency_threshold
+                            )
 
-                            ic_lst.append(include_ic.mean(axis=0))
-                            tfidf_lst.append(include_tfidf.mean(axis=0))
+                            ic_lst.append(ic)
+                            tfidf_lst.append(tfidf)
                             classification_lst.append(max_feature_cl)
                     else:
-                        pass
+                        for max_feature, max_feature_cl in zip(max_features, max_feature_clss):
+                            # For topic-based decoder select the top 3 word to determine metrics
+                            sub_max_features = max_feature.split("_")[1:]
+                            assert len(sub_max_features) == 3
+
+                            sub_ic_lst = []
+                            sub_tfidf_lst = []
+                            for sub_max_feature in sub_max_features:
+                                sub_max_feature_lb = f"{feature_group}__{sub_max_feature}"
+                                ic, tfidf = _get_semantic_similarity(
+                                    ic_df,
+                                    tfidf_df,
+                                    sub_max_feature,
+                                    sub_max_feature_lb,
+                                    frequency_threshold,
+                                )
+                                sub_ic_lst.append(ic)
+                                sub_tfidf_lst.append(tfidf)
+
+                            ic_lst.append(np.mean(sub_ic_lst))
+                            tfidf_lst.append(np.mean(sub_tfidf_lst))
+                            classification_lst.append(max_feature_cl)
 
                     max_corr_lst.append(max_corr)
                     idx_lst.append(max_idx)

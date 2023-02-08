@@ -6,6 +6,17 @@ import numpy as np
 import pandas as pd
 
 
+def _get_semantic_similarity(ic_df, tfidf_df, max_feature, max_feature_lb, frequency_threshold):
+    include_rows = tfidf_df[max_feature_lb] >= frequency_threshold
+    include_ic = ic_df[max_feature][include_rows]
+    include_tfidf = tfidf_df[max_feature_lb][include_rows]
+
+    ic = include_ic.mean(axis=0)
+    tfidf = include_tfidf.mean(axis=0)
+
+    return ic, tfidf
+
+
 def _find_category(classification_df, term, idx_col, col_name):
     classification_df = classification_df.set_index(idx_col)
     classification_df.index = classification_df.index.astype(str)
@@ -83,103 +94,42 @@ def term_classifier(terms, terms_classified_df):
             row = terms_classified_df.loc[[term]]
             classification.append(row["Classification"].values[0])
         else:
-            classification.append("Non-ns")
+            classification.append("Non-Specific")
 
     return np.array(classification)
 
 
-def topic_classifier(
-    dset,
-    dset_name,
-    model,
-    terms,
-    cotegories,
-    category,
-    crowdsourced_files,
-):
-    """Classify topics from Neurosynth based on the classification of
-    its terms
-    Parameters
-    ----------
-    dset : obejct
-        NiMARE Dataset object
-    TOPICS : str
-        Topics name.
-    term : list
-        List of terms by topic.
-    categories : list
-        ['Functional', 'Clinical', 'Anatomical', 'Non-Specific']
-    category : str
-        Category for classification: 'Functional'
-    crowdsourced_files: list
-        List with the path to csv files witg the classified terms
-    Returns
-    -------
-    first3terms : list
-        List with top terms
-    topics_classified_df :  pandas DataFrame, shape=(n_topics, n_categories + 1)
-        Topics Classified.
-    keep_topics : list
-        List with topic to keep
-    """
-    THR = 0.2
-    topterms = 3
-    # Classify terms
-    if dset_name == "neurosynth":
-        print("Classify terms using crowdsourced annotation")
-        terms_classified, _ = crowdsourcing_annot(terms, crowdsourced_files)
-    if dset_name == "neuroquery":
-        print("Classify terms using cognitive atlas")
-        # TODO: cogat_annot() function.In progress
-        # terms_classified = cogat_annot()
+def topic_classifier(terms, terms_classified_df):
+    cotegories = np.array(["Functional", "Clinical", "Anatomical", "Non-Specific"])
+    classification_lst = []
+    for term in terms:
+        sub_max_features = term.split("_")[1:]
+        assert len(sub_max_features) == 3
 
-    # worg_topic_weight: extract htis from the LDA model
-    worg_topic_weight = None
+        cotegories_count = np.zeros(len(cotegories))
+        for sub_max_feature in sub_max_features:
+            if sub_max_feature in terms_classified_df.index:
+                row = terms_classified_df.loc[[sub_max_feature]]
+                sub_classification = row["Classification"].values[0]
+            else:
+                sub_classification = "Non-Specific"
+            sub_class_idx = np.where(cotegories == sub_classification)[0]
+            cotegories_count[sub_class_idx] += 1
+        class_sorted = np.argsort(-cotegories_count)
 
-    # Classify topics
-    print("Classifying topics")
-    topics_classified = []
-    classification = []
-    keep_topics = []
-    first3terms = []
-    topics_kept = 0
-    for topic in range(len(terms)):
-        summatory = []
-        for _category in cotegories:
-            summatory.append(
-                np.sum(worg_topic_weight[topic][terms_classified[topic] == _category])
-            )
-        topics_classified.append(summatory)
+        classification = cotegories[class_sorted][0]
+        classification_lst.append(classification)
 
-        # Get first topterms from the list terms
-        # We can get this from the annotation name
-        first3terms = None
+    classification_df = pd.DataFrame()
+    classification_df["FEATURE"] = terms
+    classification_df["Classification"] = classification_lst
 
-        summatory_sorted = sorted(summatory)
-        if summatory_sorted[-2] > summatory_sorted[-1] * THR:
-            classification.append("ND")
-        else:
-            max_ind = summatory.index(summatory_sorted[-1])
-            classification.append(cotegories[max_ind])
-            if cotegories[max_ind] == category:
-                keep_topics.append(topic)
-                topics_kept += 1
-    print("Numbers of {} topic kept after classification: {}".format(category, topics_kept))
+    classification_df = classification_df.set_index("FEATURE")
 
-    # Create output Dataframe
-    topics_classified_df = pd.DataFrame(topics_classified, columns=cotegories)
-    topics_classified_df.index.name = "topics"
-    topics_classified_df["Classification"] = classification
-    topics_classified_df.insert(0, "first3terms", first3terms)
-
-    return first3terms, topics_classified_df, keep_topics
+    return np.array(classification_lst), classification_df
 
 
 def classifier(terms, dset, model, dset_name, data_dir):
-    # cotegories = ["Functional", "Clinical", "Anatomical", "Non-Specific"]
-    # category = "Functional"
-
-    # classification_fn = op.join(data_dir, f"{model}_{dset_name}_classification.csv")
     ns_term_class_fn = op.join(data_dir, "term_neurosynth_classification.csv")
 
     if not op.isfile(ns_term_class_fn):
@@ -218,7 +168,12 @@ def classifier(terms, dset, model, dset_name, data_dir):
     if model == "term":
         term_classified = term_classifier(terms, term_class_df)
     else:
-        # term_classified = topic_classifier()
-        pass
+        topic_class_fn = op.join(data_dir, f"{model}_{dset_name}_classification.csv")
+        if not op.isfile(topic_class_fn):
+            term_classified, topic_class_df = topic_classifier(terms, term_class_df)
+            topic_class_df.to_csv(topic_class_fn)
+        else:
+            topic_class_df = pd.read_csv(topic_class_fn, index_col="FEATURE")
+            term_classified = term_classifier(terms, topic_class_df)
 
     return term_classified
