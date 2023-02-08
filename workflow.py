@@ -681,34 +681,25 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
             tfidf_df = pd.read_csv(tfidf_df_fn, delimiter="\t", index_col="id")
 
         for model in models:
-            if model == "lda":
-                decoder_fn = op.join(dec_data_dir, f"lda_{dset_name}_decoder.pkl.gz")
+            if (model == "lda") or (model == "term"):
+                decoder_fn = op.join(dec_data_dir, f"{model}_{dset_name}_decoder.pkl.gz")
                 decoder_file = gzip.open(decoder_fn, "rb")
                 decoder = pickle.load(decoder_file)
                 feature_names = decoder.features_
                 features = [f.split("__")[-1] for f in feature_names]
             elif model == "gclda":
-                model_fn = op.join(dec_data_dir, f"{model}_{dset_name}_model.pkl.gz")
+                model_fn = op.join(dec_data_dir, f"gclda_{dset_name}_model.pkl.gz")
                 model_file = gzip.open(model_fn, "rb")
-                decoder = pickle.load(model_file)
-                topic_word_weights = decoder.p_word_g_topic_
+                model_obj = pickle.load(model_file)
+                topic_word_weights = model_obj.p_word_g_topic_
                 n_topics = topic_word_weights.shape[1]
-                vocabulary = np.array(decoder.vocabulary)
+                vocabulary = np.array(model_obj.vocabulary)
                 sorted_weights_idxs = np.argsort(-topic_word_weights, axis=0)
                 feature_names = [
                     "_".join(vocabulary[sorted_weights_idxs[:, topic_i]][:3])
                     for topic_i in range(n_topics)
                 ]
                 features = [f"{i + 1}_{feature_names[i]}" for i in range(n_topics)]
-            elif model == "term":
-                feature_group = (
-                    "terms_abstract_tfidf"
-                    if dset_name == "neurosynth"
-                    else "neuroquery6308_combined_tfidf"
-                )
-                feature_names = tfidf_df.columns.values
-                feature_names = [f for f in feature_names if f.startswith(feature_group)]
-                features = [f.split("__")[-1] for f in feature_names]
 
             feature_names = np.array(feature_names)
             features_arr = np.array(features)
@@ -758,8 +749,6 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
                     method_lst.append(method_slst)
                     seg_sol_slst = [f"{file_i+3}"] * n_seg
                     seg_sol_lst.append(seg_sol_slst)
-                    # ic_lst.append(0)
-                    # tfidf_lst.append(0)
 
     max_corr_lst = np.hstack(max_corr_lst)
     idx_lst = np.hstack(idx_lst)
