@@ -215,9 +215,8 @@ def gradient_segmentation(gradient, grad_seg_fn, n_segments):
             results_dict = segment_method.fit(gradient)
         else:
             print(f"\t\tLoading Results from {method} Segmentation...", flush=True)
-            results_file = open(results_fn, "rb")
-            results_dict = pickle.load(results_file)
-            results_file.close()
+            with open(results_fn, "rb") as results_file:
+                results_dict = pickle.load(results_file)
 
         segments, labels, peaks = (
             results_dict["segments"],
@@ -238,10 +237,8 @@ def gradient_segmentation(gradient, grad_seg_fn, n_segments):
         print(f"\t\tTransforming {method} segmented grad maps to activation maps...", flush=True)
         grad_seg_dict = gradient_to_maps(method, segments, peaks, grad_seg_dict, spc_output_dir)
 
-    # Save results
-    grad_segments_file = open(grad_seg_fn, "wb")
-    pickle.dump(grad_seg_dict, grad_segments_file)
-    grad_segments_file.close()
+    with open(grad_seg_fn, "wb") as grad_segments_file:
+        pickle.dump(grad_seg_dict, grad_segments_file)
 
     # Silhouette measures
     silhouette_df_fn = op.join(output_dir, "silhouette_scores.csv")
@@ -288,7 +285,7 @@ def gradient_decoding(data_dir, output_dir, grad_seg_dict, n_cores):
     # sources = ["term", "lda", "gclda"]
     # methods = ["Percentile", "KMeans", "KDE"]
     dset_names = ["neuroquery"]
-    sources = ["lda"]
+    sources = ["gclda"]
     methods = ["Percentile"]
     for dset_name in dset_names:
         dset_fn = os.path.join(ma_data_dir, f"{dset_name}_dataset.pkl.gz")
@@ -504,7 +501,7 @@ def gradient_decoding(data_dir, output_dir, grad_seg_dict, n_cores):
                         nib.save(meta_map_rh, meta_map_rh_fn)
 
                         del meta_map
-                    """
+
                     meta_map_arr_lh = meta_map_lh.agg_data()
                     meta_map_arr_rh = meta_map_rh.agg_data()
 
@@ -514,7 +511,6 @@ def gradient_decoding(data_dir, output_dir, grad_seg_dict, n_cores):
 
                     meta_maps_fslr_arr[metamap_i, :] = meta_map_fslr
                     meta_maps_permuted_arr[metamap_i, :, :] = meta_map_fslr[nullsamples]
-                    """
 
                 np.save(meta_map_fn, meta_maps_fslr_arr)
                 if n_metamaps > 200:
@@ -636,10 +632,8 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
 
     methods = ["Percentile", "KMeans", "KDE"]
     dset_names = ["neurosynth", "neuroquery"]
-    # models = ["term", "lda", "gclda"]
-    # methods = ["Percentile"]
-    # dset_names = ["neuroquery"]
-    models = ["term", "lda"]
+    models = ["term", "lda", "gclda"]
+
     max_corr_lst = []
     idx_lst = []
     feature_lst = []
@@ -650,6 +644,12 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
     ic_lst = []
     tfidf_lst = []
     classification_lst = []
+    mean_corr_lst = []
+    mean_seg_sol_lst = []
+    mean_ic_lst = []
+    mean_tfidf_lst = []
+    mean_method_lst = []
+    snr_lst = []
     for dset_name in dset_names:
         dset_fn = os.path.join(ma_data_dir, f"{dset_name}_dataset.pkl.gz")
         dset = Dataset.load(dset_fn)
@@ -666,7 +666,6 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
 
         if not op.isfile(counts_df_fn):
             counts_df = _get_counts(dset, dset_name, ma_data_dir)
-            # counts_df = counts_df.sort_values(by="id")  # To match matrix in dset.annotations
             counts_df.to_csv(counts_df_fn, sep="\t")
         else:
             counts_df = pd.read_csv(counts_df_fn, delimiter="\t", index_col="id")
@@ -729,6 +728,9 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
                     n_seg = max_corr.shape[0]
                     segments = np.arange(1, n_seg + 1)
                     # segments = segments/segments.max()
+                    temp_ic_lst = []
+                    temp_tfidf_lst = []
+                    temp_classification_lst = []
                     if model == "term":
                         for max_feature, max_feature_cl in zip(max_features, max_feature_clss):
                             max_feature_lb = f"{feature_group}__{max_feature}"
@@ -736,9 +738,9 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
                                 ic_df, tfidf_df, max_feature, max_feature_lb, frequency_threshold
                             )
 
-                            ic_lst.append(ic)
-                            tfidf_lst.append(tfidf)
-                            classification_lst.append(max_feature_cl)
+                            temp_ic_lst.append(ic)
+                            temp_tfidf_lst.append(tfidf)
+                            temp_classification_lst.append(max_feature_cl)
                     else:
                         for max_feature, max_feature_cl in zip(max_features, max_feature_clss):
                             # For topic-based decoder select the top 3 word to determine metrics
@@ -759,20 +761,33 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
                                 sub_ic_lst.append(ic)
                                 sub_tfidf_lst.append(tfidf)
 
-                            ic_lst.append(np.mean(sub_ic_lst))
-                            tfidf_lst.append(np.mean(sub_tfidf_lst))
-                            classification_lst.append(max_feature_cl)
+                            temp_ic_lst.append(np.mean(sub_ic_lst))
+                            temp_tfidf_lst.append(np.mean(sub_tfidf_lst))
+                            temp_classification_lst.append(max_feature_cl)
 
                     max_corr_lst.append(max_corr)
                     idx_lst.append(max_idx)
                     feature_lst.append(max_features)
                     max_pval_lst.append(max_pval)
                     segments_lst.append(segments)
+                    ic_lst.append(temp_ic_lst)
+                    tfidf_lst.append(temp_tfidf_lst)
+                    classification_lst.append(temp_classification_lst)
 
                     method_slst = [f"{model}_{dset_name}_{method}"] * n_seg
                     method_lst.append(method_slst)
                     seg_sol_slst = [f"{file_i+3}"] * n_seg
                     seg_sol_lst.append(seg_sol_slst)
+
+                    snr = sum(np.array(temp_classification_lst) == "Functional") / len(
+                        temp_classification_lst
+                    )
+                    mean_method_lst.append(f"{model}_{dset_name}_{method}")
+                    mean_seg_sol_lst.append(f"{file_i+3}")
+                    mean_corr_lst.append(np.mean(max_corr))
+                    mean_ic_lst.append(np.mean(temp_ic_lst))
+                    mean_tfidf_lst.append(np.mean(temp_tfidf_lst))
+                    snr_lst.append(snr)
 
     max_corr_lst = np.hstack(max_corr_lst)
     idx_lst = np.hstack(idx_lst)
@@ -785,11 +800,16 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
     tfidf_lst = np.hstack(tfidf_lst)
     classification_lst = np.hstack(classification_lst)
 
+    mean_method_lst = np.hstack(mean_method_lst)
+    mean_corr_lst = np.hstack(mean_corr_lst)
+    mean_ic_lst = np.hstack(mean_ic_lst)
+    mean_tfidf_lst = np.hstack(mean_tfidf_lst)
+    snr_lst = np.hstack(snr_lst)
+
     data_df = pd.DataFrame()
     data_df["method"] = method_lst
     data_df["segment"] = segments_lst
     data_df["segment_solution"] = seg_sol_lst
-    # data_df["segment"] = data_df["segment"].astype(str)
     data_df["max_corr"] = max_corr_lst
     data_df["pvalue"] = max_pval_lst
     data_df["corr_idx"] = idx_lst
@@ -798,9 +818,18 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
     data_df["tfidf"] = tfidf_lst
     data_df["classification"] = classification_lst
 
-    data_df.to_csv(op.join(output_dir, "performance.tsv"), sep="\t")
+    mean_data_df = pd.DataFrame()
+    mean_data_df["method"] = mean_method_lst
+    mean_data_df["segment_solution"] = mean_seg_sol_lst
+    mean_data_df["max_corr"] = mean_corr_lst
+    mean_data_df["ic"] = mean_ic_lst
+    mean_data_df["tfidf"] = mean_tfidf_lst
+    mean_data_df["snr"] = snr_lst
 
-    return data_df
+    data_df.to_csv(op.join(output_dir, "performance.tsv"), sep="\t")
+    mean_data_df.to_csv(op.join(output_dir, "mean_performance.tsv"), sep="\t")
+
+    return data_df, mean_data_df
 
 
 def decoding_results():
@@ -828,9 +857,9 @@ def main(project_dir, n_cores):
     data_dir = op.join(project_dir, "data")
     templates_dir = op.join(project_dir, "data", "templates")
     hcp_gradient_dir = op.join(project_dir, "results", "hcp_gradient")
-    gradient_segmentation_dir = op.join(project_dir, "results", "gradient_segmentation")
-    gradient_decoding_dir = op.join(project_dir, "results", "gradient_decoding")
-    decoding_performance_dir = op.join(project_dir, "results", "decoding_performance")
+    gradient_segmentation_dir = op.join(project_dir, "results", "segmentation")
+    gradient_decoding_dir = op.join(project_dir, "results", "decoding")
+    decoding_performance_dir = op.join(project_dir, "results", "performance")
     # decoding_results_dir = op.join(project_dir, "results", "decoding_results")
     """
     # Run Workflow
@@ -868,7 +897,7 @@ def main(project_dir, n_cores):
     print("4. Performance of Decoding Strategies", flush=True)
     # grad_seg_fn = op.join(gradient_segmentation_dir, "grad_segments.pkl")
     # if not op.isfile(grad_seg_fn):
-    performance_df = decoding_performance(
+    performance_df, mean_performance_df = decoding_performance(
         data_dir, gradient_decoding_dir, decoding_performance_dir
     )
 
