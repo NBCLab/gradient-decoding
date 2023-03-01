@@ -18,26 +18,22 @@ def _get_semantic_similarity(ic_df, tfidf_df, max_feature, max_feature_lb, frequ
 
 
 def _find_category(classification_df, term, idx_col, col_name):
-    classification_df = classification_df.set_index(idx_col)
+    if classification_df.index.name != idx_col:
+        classification_df = classification_df.set_index(idx_col)
     classification_df.index = classification_df.index.astype(str)
 
     m = classification_df.index == term
     if m.sum() > 0:
         classification = classification_df.loc[term, col_name]
-        if isinstance(classification, pd.Series):
-            classification = classification.to_list()[0]
-
-        return classification
     else:
         val = get_close_matches(term, classification_df.index)
-        if len(val) > 0:
-            classification = classification_df.loc[val[0], col_name]
-            if isinstance(classification, pd.Series):
-                classification = classification.to_list()[0]
-
-            return classification
-        else:
+        if len(val) <= 0:
             return None
+        classification = classification_df.loc[val[0], col_name]
+    if isinstance(classification, pd.Series):
+        classification = classification.to_list()[0]
+
+    return classification
 
 
 def neuroquery_annot(features, ns_classification_df, nq_classification_df):
@@ -146,23 +142,13 @@ def classifier(terms, dset, model, dset_name, data_dir):
 
     elif dset_name == "neuroquery":
         nq_term_class_fn = op.join(data_dir, "term_neuroquery_classification.csv")
-        if not op.isfile(nq_term_class_fn):
-            nq_categories_fn = op.join(
-                data_dir, "raw", "data-neuroquery_version-1_termcategories.csv"
+        nq_term_class_df = (
+            pd.read_csv(nq_term_class_fn, index_col="FEATURE")
+            if op.isfile(nq_term_class_fn)
+            else _extracted_from_classifier_19(
+                data_dir, dset, ns_term_class_df, nq_term_class_fn
             )
-            nq_categories_df = pd.read_csv(nq_categories_fn)
-
-            feature_names = dset.annotations.columns.values
-            feature_names = [
-                f for f in feature_names if f.startswith("neuroquery6308_combined_tfidf")
-            ]
-            features = [f.split("__")[-1] for f in feature_names]
-
-            nq_term_class_df = neuroquery_annot(features, ns_term_class_df, nq_categories_df)
-            nq_term_class_df.to_csv(nq_term_class_fn)
-        else:
-            nq_term_class_df = pd.read_csv(nq_term_class_fn, index_col="FEATURE")
-
+        )
         term_class_df = nq_term_class_df.copy()
 
     if model == "term":
@@ -177,3 +163,21 @@ def classifier(terms, dset, model, dset_name, data_dir):
             term_classified = term_classifier(terms, topic_class_df)
 
     return term_classified
+
+
+# TODO Rename this here and in `classifier`
+def _extracted_from_classifier_19(data_dir, dset, ns_term_class_df, nq_term_class_fn):
+    nq_categories_fn = op.join(
+        data_dir, "raw", "data-neuroquery_version-1_termcategories.csv"
+    )
+    nq_categories_df = pd.read_csv(nq_categories_fn)
+
+    feature_names = dset.annotations.columns.values
+    feature_names = [
+        f for f in feature_names if f.startswith("neuroquery6308_combined_tfidf")
+    ]
+    features = [f.split("__")[-1] for f in feature_names]
+
+    result = neuroquery_annot(features, ns_term_class_df, nq_categories_df)
+    result.to_csv(nq_term_class_fn)
+    return result

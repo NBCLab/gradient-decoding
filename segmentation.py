@@ -40,10 +40,8 @@ class Segmentation(metaclass=ABCMeta):
         }
 
         os.makedirs(op.dirname(self.segmentation_fn), exist_ok=True)
-        segmentation_file = open(self.segmentation_fn, "wb")
-        pickle.dump(segmentation_dict, segmentation_file)
-        segmentation_file.close()
-
+        with open(self.segmentation_fn, "wb") as segmentation_file:
+            pickle.dump(segmentation_dict, segmentation_file)
         return segmentation_dict
 
 
@@ -198,8 +196,7 @@ class KMeansSegmentation(Segmentation):
             labels_arr = order_mapper[kmeans_model.labels_]
 
             gradient_maps = []
-            map_bounds = []
-            map_bounds.append(gradient.min())
+            map_bounds = [gradient.min()]
             for i in range(n_segment):
                 map_arr = np.zeros_like(gradient)
                 map_arr[labels_arr == i] = gradient[labels_arr == i]
