@@ -22,8 +22,16 @@ def plot_gradient(
     cmap="viridis",
     threshold_=None,
     color_range=None,
+    views=None,
+    title=False,
+    cbar=False,
     out_dir=None,
+    prefix="",
 ):
+    prefix_sep = "" if prefix == "" else "_"
+    if not prefix.endswith(prefix_sep):
+        prefix = prefix + prefix_sep
+
     neuromaps_dir = op.join(data_dir, "neuromaps-data")
     surfaces = fetch_fslr(density="32k", data_dir=neuromaps_dir)
 
@@ -38,22 +46,32 @@ def plot_gradient(
             lh_grad = threshold(lh_grad, threshold_)
             rh_grad = threshold(rh_grad, threshold_)
 
-        p = Plot(surf_lh=lh, surf_rh=rh)
-        p.add_layer({"left": sulc_lh, "right": sulc_rh}, cmap="binary_r", cbar=False)
-        p.add_layer({"left": lh_grad, "right": rh_grad}, cmap=cmap, color_range=color_range)
+        if views:
+            p = Plot(surf_lh=lh, views=views)
+            p.add_layer({"left": sulc_lh}, cmap="binary_r", cbar=False)
+            p.add_layer({"left": lh_grad}, cmap=cmap, cbar=cbar, color_range=color_range)
+        else:
+            p = Plot(surf_lh=lh, surf_rh=rh)
+            p.add_layer({"left": sulc_lh, "right": sulc_rh}, cmap="binary_r", cbar=False)
+            p.add_layer(
+                {"left": lh_grad, "right": rh_grad}, cmap=cmap, cbar=cbar, color_range=color_range
+            )
 
         fig = p.build()
         if grad_seg_labels is None:
             base_name = op.basename(grad_segment_lh)
             firts_name = base_name.split("_")[0].split("-")[1]
             last_name = base_name.split("_")[1].split("-")[1]
+            id_name = base_name.split("_")[2].split("-")[1]
             title_ = f"{firts_name}: {last_name}"
         else:
             title_ = grad_seg_labels[img_i]
-        fig.axes[0].set_title(title_, pad=-3)
+
+        if title:
+            fig.axes[0].set_title(title_, pad=-3)
 
         if out_dir is not None:
-            out_file = op.join(out_dir, f"{firts_name}_{last_name}.tiff")
+            out_file = op.join(out_dir, f"{prefix}{firts_name}_{last_name}_{id_name}.tiff")
             plt.savefig(out_file, bbox_inches="tight", dpi=1000)
 
         plt.show()
@@ -139,10 +157,9 @@ def plot_top_words(model, feature_names, n_top_words, title):
 
 
 def plot_profile(data_df, metric, hue_order, cmap="tab20"):
-    sns.set(style="whitegrid")
+    # sns.set(style="whitegrid")
 
     my_cmap = plt.get_cmap(cmap)
-    n_approaches = len(hue_order)
     n_segments = 30
     fig, axes = plt.subplots(n_segments, 2)
     fig.set_size_inches(15, 90)
@@ -209,6 +226,7 @@ def plot_profile(data_df, metric, hue_order, cmap="tab20"):
 
         ax_handles, ax_labels = axes[seg_sol, 1].get_legend_handles_labels()
         sort_idx = np.argsort(-np.array(mean_lst))
+        """
         axes[seg_sol, 1].legend(
             np.array(ax_handles)[sort_idx],
             np.array(text_lst)[sort_idx],
@@ -216,7 +234,7 @@ def plot_profile(data_df, metric, hue_order, cmap="tab20"):
             bbox_to_anchor=(1.04, 1.15),
             ncol=1,
         )
-
+        """
     fig.legend(
         handles,
         labels,
@@ -227,4 +245,26 @@ def plot_profile(data_df, metric, hue_order, cmap="tab20"):
 
     fig.tight_layout()
     # plt.savefig(op.join(result_dir, "gradient_segmentation", "Figures", "correlation_profile.png"), dpi=300, bbox_inches="tight")
+    plt.show()
+
+
+def plot_mean_profile(data_df, metric, hue_order, cmap="tab20"):
+    # sns.set(style="whitegrid")
+
+    fig, ax = plt.subplots(1, 1)
+    fig.set_size_inches(3, 15)
+
+    sns.lineplot(
+        data=data_df,
+        x=metric,
+        y="segment_solution",
+        palette=cmap,
+        hue="method",
+        hue_order=hue_order,
+        sort=False,
+        marker="o",
+        ax=ax,
+    )
+    ax.get_legend().remove()
+    # plt.savefig(op.join("./Fig", "mean_correlation_profile.eps"), bbox_inches="tight")
     plt.show()
