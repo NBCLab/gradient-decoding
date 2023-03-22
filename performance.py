@@ -95,7 +95,7 @@ def term_classifier(terms, terms_classified_df):
     return np.array(classification)
 
 
-def topic_classifier(terms, terms_classified_df):
+def topic_classifier(terms, weights, terms_classified_df):
     cotegories = np.array(["Functional", "Clinical", "Anatomical", "Non-Specific"])
     classification_lst = []
     for term in terms:
@@ -103,14 +103,14 @@ def topic_classifier(terms, terms_classified_df):
         assert len(sub_max_features) == 3
 
         cotegories_count = np.zeros(len(cotegories))
-        for sub_max_feature in sub_max_features:
+        for sub_max_feature, weight in zip(sub_max_features, weights):
             if sub_max_feature in terms_classified_df.index:
                 row = terms_classified_df.loc[[sub_max_feature]]
                 sub_classification = row["Classification"].values[0]
             else:
                 sub_classification = "Non-Specific"
             sub_class_idx = np.where(cotegories == sub_classification)[0]
-            cotegories_count[sub_class_idx] += 1
+            cotegories_count[sub_class_idx] += 1 * weight
         class_sorted = np.argsort(-cotegories_count)
 
         classification = cotegories[class_sorted][0]
@@ -125,7 +125,7 @@ def topic_classifier(terms, terms_classified_df):
     return np.array(classification_lst), classification_df
 
 
-def classifier(terms, dset, model, dset_name, data_dir):
+def classifier(terms, weights, dset, model, dset_name, data_dir):
     ns_term_class_fn = op.join(data_dir, "term_neurosynth_classification.csv")
 
     if not op.isfile(ns_term_class_fn):
@@ -145,9 +145,7 @@ def classifier(terms, dset, model, dset_name, data_dir):
         nq_term_class_df = (
             pd.read_csv(nq_term_class_fn, index_col="FEATURE")
             if op.isfile(nq_term_class_fn)
-            else _extracted_from_classifier_19(
-                data_dir, dset, ns_term_class_df, nq_term_class_fn
-            )
+            else _extracted_from_classifier_19(data_dir, dset, ns_term_class_df, nq_term_class_fn)
         )
         term_class_df = nq_term_class_df.copy()
 
@@ -156,7 +154,7 @@ def classifier(terms, dset, model, dset_name, data_dir):
     else:
         topic_class_fn = op.join(data_dir, f"{model}_{dset_name}_classification.csv")
         if not op.isfile(topic_class_fn):
-            term_classified, topic_class_df = topic_classifier(terms, term_class_df)
+            term_classified, topic_class_df = topic_classifier(terms, weights, term_class_df)
             topic_class_df.to_csv(topic_class_fn)
         else:
             topic_class_df = pd.read_csv(topic_class_fn, index_col="FEATURE")
@@ -167,15 +165,11 @@ def classifier(terms, dset, model, dset_name, data_dir):
 
 # TODO Rename this here and in `classifier`
 def _extracted_from_classifier_19(data_dir, dset, ns_term_class_df, nq_term_class_fn):
-    nq_categories_fn = op.join(
-        data_dir, "raw", "data-neuroquery_version-1_termcategories.csv"
-    )
+    nq_categories_fn = op.join(data_dir, "raw", "data-neuroquery_version-1_termcategories.csv")
     nq_categories_df = pd.read_csv(nq_categories_fn)
 
     feature_names = dset.annotations.columns.values
-    feature_names = [
-        f for f in feature_names if f.startswith("neuroquery6308_combined_tfidf")
-    ]
+    feature_names = [f for f in feature_names if f.startswith("neuroquery6308_combined_tfidf")]
     features = [f.split("__")[-1] for f in feature_names]
 
     result = neuroquery_annot(features, ns_term_class_df, nq_categories_df)

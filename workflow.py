@@ -686,6 +686,30 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
             tfidf_df = pd.read_csv(tfidf_df_fn, delimiter="\t", index_col="id")
 
         for model in models:
+            if (model == "lda") or (model == "gclda"):
+                model_fn = op.join(dec_data_dir, f"{model}_{dset_name}_model.pkl.gz")
+                model_file = gzip.open(model_fn, "rb")
+                model_obj = pickle.load(model_file)
+
+                topic_word_weights = (
+                    model_obj.p_word_g_topic_.T
+                    if model == "gclda"
+                    else model_obj.distributions_["p_topic_g_word"]
+                )
+
+                n_topics = topic_word_weights.shape[0]
+                sorted_weights_idxs = np.argsort(-topic_word_weights, axis=1)
+                frequencies_lst = []
+                for topic_i in range(n_topics):
+                    frequencies = topic_word_weights[topic_i, sorted_weights_idxs[topic_i, :]][
+                        :3
+                    ].tolist()
+                    frequencies = [freq / np.max(frequencies) for freq in frequencies]
+                    frequencies = np.round(frequencies, 3).tolist()
+                    frequencies_lst.append(frequencies)
+            else:
+                frequencies = None
+
             if (model == "lda") or (model == "term"):
                 decoder_fn = op.join(dec_data_dir, f"{model}_{dset_name}_decoder.pkl.gz")
                 decoder_file = gzip.open(decoder_fn, "rb")
@@ -693,31 +717,44 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
                 feature_names = decoder.features_
                 features = [f.split("__")[-1] for f in feature_names]
             elif model == "gclda":
-                model_fn = op.join(dec_data_dir, f"gclda_{dset_name}_model.pkl.gz")
-                model_file = gzip.open(model_fn, "rb")
-                model_obj = pickle.load(model_file)
-                topic_word_weights = model_obj.p_word_g_topic_
-                n_topics = topic_word_weights.shape[1]
                 vocabulary = np.array(model_obj.vocabulary)
-                sorted_weights_idxs = np.argsort(-topic_word_weights, axis=0)
                 feature_names = [
-                    "_".join(vocabulary[sorted_weights_idxs[:, topic_i]][:3])
+                    "_".join(vocabulary[sorted_weights_idxs[topic_i, :]][:3])
                     for topic_i in range(n_topics)
                 ]
                 features = [f"{i + 1}_{feature_names[i]}" for i in range(n_topics)]
 
             features_arr = np.array(features)
-            features_classified = classifier(features_arr, dset, model, dset_name, class_data_dir)
+            features_classified = classifier(
+                features_arr, frequencies, dset, model, dset_name, class_data_dir
+            )
 
             for method in methods:
                 corr_dir = op.join(dec_data_dir, f"{model}_{dset_name}_corr_{method}")
                 corr_lst = sorted(glob(op.join(corr_dir, "*_corr.npy")))
                 pval_lst = sorted(glob(op.join(corr_dir, "*_pval.npy")))
 
-                # plot_df = pd.DataFrame()
                 for file_i, corr_file in enumerate(corr_lst):
                     corr_arr = np.load(corr_file)
                     pval_arr = np.load(pval_lst[file_i])
+
+                    for seg_id in range(corr_arr.shape[0]):
+                        result_df = pd.DataFrame()
+
+                        result_df["corr"] = corr_arr[seg_id, :]
+                        result_df["pval"] = pval_arr[seg_id, :]
+                        result_df["feature"] = features_arr
+                        result_df["classification"] = features_classified
+                        if (model == "lda") or (model == "gclda"):
+                            result_df["frequencies"] = frequencies_lst
+
+                        result_df.to_csv(
+                            op.join(
+                                corr_dir,
+                                f"{file_i+3:02d}-{seg_id+1:02d}.tsv",
+                            ),
+                            sep="\t",
+                        )
 
                     max_idx = corr_arr.argmax(axis=1)
 
