@@ -24,6 +24,7 @@ def plot_gradient(
     color_range=None,
     views=None,
     title=False,
+    layout="grid",
     cbar=False,
     out_dir=None,
     prefix="",
@@ -47,11 +48,11 @@ def plot_gradient(
             rh_grad = threshold(rh_grad, threshold_)
 
         if views:
-            p = Plot(surf_lh=lh, views=views)
+            p = Plot(surf_lh=lh, views=views, layout=layout)
             p.add_layer({"left": sulc_lh}, cmap="binary_r", cbar=False)
             p.add_layer({"left": lh_grad}, cmap=cmap, cbar=cbar, color_range=color_range)
         else:
-            p = Plot(surf_lh=lh, surf_rh=rh)
+            p = Plot(surf_lh=lh, surf_rh=rh, layout=layout)
             p.add_layer({"left": sulc_lh, "right": sulc_rh}, cmap="binary_r", cbar=False)
             p.add_layer(
                 {"left": lh_grad, "right": rh_grad}, cmap=cmap, cbar=cbar, color_range=color_range
