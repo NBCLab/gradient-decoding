@@ -22,6 +22,7 @@ from nimare.extract import download_abstracts, fetch_neuroquery, fetch_neurosynt
 from nimare.io import convert_neurosynth_to_dataset
 from nimare.meta.cbma import mkda
 from nimare.stats import pearson
+from pymare.stats import fdr
 from surfplot.utils import add_fslr_medial_wall
 
 import utils
@@ -634,22 +635,25 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
     dset_names = ["neurosynth", "neuroquery"]
     models = ["term", "lda", "gclda"]
 
-    max_corr_lst = []
-    idx_lst = []
-    feature_lst = []
-    max_pval_lst = []
-    segments_lst = []
-    method_lst = []
-    seg_sol_lst = []
-    ic_lst = []
-    tfidf_lst = []
-    classification_lst = []
-    mean_corr_lst = []
-    mean_seg_sol_lst = []
-    mean_ic_lst = []
-    mean_tfidf_lst = []
-    mean_method_lst = []
-    snr_lst = []
+    (
+        max_corr_lst,
+        idx_lst,
+        feature_lst,
+        max_pval_lst,
+        max_fdr_pval_lst,
+        segments_lst,
+        method_lst,
+        seg_sol_lst,
+        ic_lst,
+        tfidf_lst,
+        classification_lst,
+        mean_corr_lst,
+        mean_seg_sol_lst,
+        mean_ic_lst,
+        mean_tfidf_lst,
+        mean_method_lst,
+        snr_lst,
+    ) = ([] for _ in range(17))
     for dset_name in dset_names:
         dset_fn = os.path.join(ma_data_dir, f"{dset_name}_dataset.pkl.gz")
         dset = Dataset.load(dset_fn)
@@ -738,11 +742,15 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
                     corr_arr = np.load(corr_file)
                     pval_arr = np.load(pval_lst[file_i])
 
+                    sub_corr_pvals = []
                     for seg_id in range(corr_arr.shape[0]):
                         result_df = pd.DataFrame()
+                        corr_pvals = fdr(pval_arr[seg_id, :])
+                        sub_corr_pvals.append(corr_pvals)
 
                         result_df["corr"] = corr_arr[seg_id, :]
                         result_df["pval"] = pval_arr[seg_id, :]
+                        result_df["fdr_pval"] = corr_pvals
                         result_df["feature"] = features_arr
                         result_df["classification"] = features_classified
                         if (model == "lda") or (model == "gclda"):
@@ -755,11 +763,13 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
                             ),
                             sep="\t",
                         )
+                    sub_corr_pvals = np.vstack(sub_corr_pvals)
 
                     max_idx = corr_arr.argmax(axis=1)
 
                     max_corr = corr_arr[np.arange(corr_arr.shape[0]), max_idx]
                     max_pval = pval_arr[np.arange(pval_arr.shape[0]), max_idx]
+                    max_fdr_pval = sub_corr_pvals[np.arange(sub_corr_pvals.shape[0]), max_idx]
                     max_features = features_arr[max_idx]
                     max_feature_clss = features_classified[max_idx]
                     n_seg = max_corr.shape[0]
@@ -806,6 +816,7 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
                     idx_lst.append(max_idx)
                     feature_lst.append(max_features)
                     max_pval_lst.append(max_pval)
+                    max_fdr_pval_lst.append(max_fdr_pval)
                     segments_lst.append(segments)
                     ic_lst.append(temp_ic_lst)
                     tfidf_lst.append(temp_tfidf_lst)
@@ -830,6 +841,7 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
     idx_lst = np.hstack(idx_lst)
     feature_lst = np.hstack(feature_lst)
     max_pval_lst = np.hstack(max_pval_lst)
+    max_fdr_pval_lst = np.hstack(max_fdr_pval_lst)
     segments_lst = np.hstack(segments_lst)
     seg_sol_lst = np.hstack(seg_sol_lst)
     method_lst = np.hstack(method_lst)
@@ -849,6 +861,7 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
     data_df["segment_solution"] = seg_sol_lst
     data_df["max_corr"] = max_corr_lst
     data_df["pvalue"] = max_pval_lst
+    data_df["fdr_pvalue"] = max_fdr_pval_lst
     data_df["corr_idx"] = idx_lst
     data_df["features"] = feature_lst
     data_df["information_content"] = ic_lst
