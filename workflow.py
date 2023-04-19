@@ -23,6 +23,7 @@ from nimare.io import convert_neurosynth_to_dataset
 from nimare.meta.cbma import mkda
 from nimare.stats import pearson
 from pymare.stats import fdr
+from sklearn.feature_extraction.text import TfidfTransformer
 from surfplot.utils import add_fslr_medial_wall
 
 import utils
@@ -631,6 +632,46 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
     ma_data_dir = op.join(data_dir, "meta-analysis")
     class_data_dir = op.join(data_dir, "classification")
 
+    counts_df_fn = op.join(dec_data_dir, "nsnq_counts.tsv")
+    ic_df_fn = op.join(dec_data_dir, "nsnq_ic.tsv")
+    tfidf_df_fn = op.join(dec_data_dir, "nsnq_tfidf.tsv")
+    if not op.isfile(counts_df_fn):
+        # Generate counts of combined dataset
+        ns_counts_df_fn = op.join(dec_data_dir, "neurosynth_counts.tsv")
+        nq_counts_df_fn = op.join(dec_data_dir, "neuroquery_counts.tsv")
+        ns_counts_df = pd.read_csv(ns_counts_df_fn, delimiter="\t", index_col="id")
+        nq_counts_df = pd.read_csv(nq_counts_df_fn, delimiter="\t", index_col="id")
+
+        counts_df = pd.merge(nq_counts_df, ns_counts_df, how="outer", on=["id"])
+        counts_df = counts_df.fillna(0)
+        for col in counts_df.columns:
+            if col.endswith("_x") or col.endswith("_y"):
+                if col in counts_df.columns:
+                    counts_df[col[:-2]] = counts_df[col[:-2] + "_x"] + counts_df[col[:-2] + "_y"]
+                    counts_df.drop([col[:-2] + "_x", col[:-2] + "_y"], axis=1, inplace=True)
+        counts_df = counts_df.sort_index(axis=1)
+        counts_df.to_csv(counts_df_fn, sep="\t")
+    else:
+        counts_df = pd.read_csv(counts_df_fn, delimiter="\t", index_col="id")
+
+    if not op.isfile(ic_df_fn):
+        p_t_c = counts_df.sum(axis=0) / counts_df.values.sum()
+        ic_df = -np.log(p_t_c)
+        ic_df = ic_df.replace([np.inf, -np.inf], 0)
+        ic_df = ic_df.to_frame().T
+        ic_df.to_csv(ic_df_fn, sep="\t", index=False)
+    else:
+        ic_df = pd.read_csv(ic_df_fn, delimiter="\t")
+
+    if not op.isfile(tfidf_df_fn):
+        tfidf_tr = TfidfTransformer()
+        X = counts_df.to_numpy()
+        X_tr = tfidf_tr.fit_transform(X)
+        tfidf_df = pd.DataFrame(X_tr.toarray(), index=counts_df.index, columns=counts_df.columns)
+        tfidf_df.to_csv(tfidf_df_fn, sep="\t")
+    else:
+        tfidf_df = pd.read_csv(tfidf_df_fn, delimiter="\t", index_col="id")
+
     methods = ["Percentile", "KMeans", "KDE"]
     dset_names = ["neurosynth", "neuroquery"]
     models = ["term", "lda", "gclda"]
@@ -657,37 +698,7 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
     for dset_name in dset_names:
         dset_fn = os.path.join(ma_data_dir, f"{dset_name}_dataset.pkl.gz")
         dset = Dataset.load(dset_fn)
-
-        if dset_name == "neurosynth":
-            feature_group = "terms_abstract_tfidf"
-        elif dset_name == "neuroquery":
-            feature_group = "neuroquery6308_combined_tfidf"
         frequency_threshold = 0.001
-
-        counts_df_fn = op.join(dec_data_dir, f"{dset_name}_counts.tsv")
-        ic_df_fn = op.join(dec_data_dir, f"{dset_name}_ic.tsv")
-        tfidf_df_fn = op.join(dec_data_dir, f"{dset_name}_tfidf.tsv")
-
-        if not op.isfile(counts_df_fn):
-            counts_df = _get_counts(dset, dset_name, ma_data_dir)
-            counts_df.to_csv(counts_df_fn, sep="\t")
-        else:
-            counts_df = pd.read_csv(counts_df_fn, delimiter="\t", index_col="id")
-
-        if not op.isfile(ic_df_fn):
-            p_t_d = counts_df.div(counts_df.sum(axis=1), axis=0)
-            ic_df = -np.log(p_t_d)
-            ic_df = ic_df.replace([np.inf, -np.inf], 0)
-            ic_df.to_csv(ic_df_fn, sep="\t")
-        else:
-            ic_df = pd.read_csv(ic_df_fn, delimiter="\t", index_col="id")
-
-        if not op.isfile(tfidf_df_fn):
-            tfidf_df = dset.annotations.set_index("id")
-            tfidf_df = tfidf_df[tfidf_df.index.isin(ic_df.index)]
-            tfidf_df.to_csv(tfidf_df_fn, sep="\t")
-        else:
-            tfidf_df = pd.read_csv(tfidf_df_fn, delimiter="\t", index_col="id")
 
         for model in models:
             if (model == "lda") or (model == "gclda"):
@@ -780,9 +791,8 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
                     temp_classification_lst = []
                     if model == "term":
                         for max_feature, max_feature_cl in zip(max_features, max_feature_clss):
-                            max_feature_lb = f"{feature_group}__{max_feature}"
                             ic, tfidf = _get_semantic_similarity(
-                                ic_df, tfidf_df, max_feature, max_feature_lb, frequency_threshold
+                                ic_df, tfidf_df, max_feature, frequency_threshold
                             )
 
                             temp_ic_lst.append(ic)
@@ -797,19 +807,17 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
                             sub_ic_lst = []
                             sub_tfidf_lst = []
                             for sub_max_feature in sub_max_features:
-                                sub_max_feature_lb = f"{feature_group}__{sub_max_feature}"
                                 ic, tfidf = _get_semantic_similarity(
                                     ic_df,
                                     tfidf_df,
                                     sub_max_feature,
-                                    sub_max_feature_lb,
                                     frequency_threshold,
                                 )
                                 sub_ic_lst.append(ic)
                                 sub_tfidf_lst.append(tfidf)
 
-                            temp_ic_lst.append(np.mean(sub_ic_lst))
-                            temp_tfidf_lst.append(np.mean(sub_tfidf_lst))
+                            temp_ic_lst.append(np.sum(sub_ic_lst))
+                            temp_tfidf_lst.append(np.sum(sub_tfidf_lst))
                             temp_classification_lst.append(max_feature_cl)
 
                     max_corr_lst.append(max_corr)

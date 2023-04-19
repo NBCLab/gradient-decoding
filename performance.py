@@ -6,12 +6,11 @@ import numpy as np
 import pandas as pd
 
 
-def _get_semantic_similarity(ic_df, tfidf_df, max_feature, max_feature_lb, frequency_threshold):
-    include_rows = tfidf_df[max_feature_lb] >= frequency_threshold
-    include_ic = ic_df[max_feature][include_rows]
-    include_tfidf = tfidf_df[max_feature_lb][include_rows]
+def _get_semantic_similarity(ic_df, tfidf_df, max_feature, frequency_threshold):
+    include_rows = tfidf_df[max_feature] >= frequency_threshold
+    include_tfidf = tfidf_df[max_feature][include_rows]
 
-    ic = include_ic.mean(axis=0)
+    ic = ic_df[max_feature].values[0]
     tfidf = include_tfidf.mean(axis=0)
 
     return ic, tfidf
