@@ -202,7 +202,7 @@ class KMeansSegmentation(Segmentation):
                 map_arr[labels_arr == i] = gradient[labels_arr == i]
                 gradient_maps.append(map_arr)
 
-                map_bounds.append(map_arr.max())
+                map_bounds.append(gradient[labels_arr == i].max())
 
             segments.append(gradient_maps)
             labels.append(labels_arr)
