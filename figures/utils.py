@@ -64,7 +64,7 @@ def plot_gradient(
             firts_name = base_name.split("_")[0].split("-")[1]
             last_name = base_name.split("_")[1].split("-")[1]
             id_name = base_name.split("_")[2].split("-")[1]
-            title_ = f"{firts_name}: {last_name}"
+            title_ = f"{firts_name}-{last_name}"
         else:
             title_ = grad_seg_labels[img_i]
 
@@ -72,7 +72,7 @@ def plot_gradient(
             fig.axes[0].set_title(title_, pad=-3)
 
         if out_dir is not None:
-            out_file = op.join(out_dir, f"{prefix}{firts_name}_{last_name}_{id_name}.tiff")
+            out_file = op.join(out_dir, f"{prefix}{title_}.tiff")
             plt.savefig(out_file, bbox_inches="tight", dpi=1000)
 
         plt.show()
@@ -95,13 +95,15 @@ def plot_subcortical_gradient(subcort_grad_fnames, cmap="viridis", threshold_=No
         plt.show()
 
 
-def plot_meta_maps(decoder_fn, n_init=0, n_maps=10, threshold=2, model="decoder"):
+def plot_meta_maps(
+    decoder_fn, map_idxs, threshold=2, model="decoder", colorbar=True, out_dir=None
+):
     decoder_file = gzip.open(decoder_fn, "rb")
     decoder = pickle.load(decoder_file)
     if model == "decoder":
         meta_maps = decoder.images_
         features = [f.split("__")[-1] for f in decoder.features_]
-        meta_maps_imgs = decoder.masker.inverse_transform(meta_maps[n_init : n_init + n_maps, :])
+        meta_maps_imgs = decoder.masker.inverse_transform(meta_maps[map_idxs, :])
     elif model == "gclda":
         topic_word_weights = decoder.p_word_g_topic_
         n_topics = topic_word_weights.shape[1]
@@ -112,22 +114,24 @@ def plot_meta_maps(decoder_fn, n_init=0, n_maps=10, threshold=2, model="decoder"
             for topic_i in range(n_topics)
         ]
         features = [f"{i + 1}_{top_tokens[i]}" for i in range(n_topics)]
-        meta_maps_imgs = masking.unmask(
-            decoder.p_voxel_g_topic_.T[n_init : n_init + n_maps, :], decoder.mask
-        )
+        meta_maps_imgs = masking.unmask(decoder.p_voxel_g_topic_.T[map_idxs, :], decoder.mask)
 
-    features_to_plot = features[n_init : n_init + n_maps]
-
+    features_to_plot = np.array(features)[map_idxs]
+    n_maps = len(map_idxs)
     for i_feature in range(n_maps):
         feature_img_3d = image.index_img(meta_maps_imgs, i_feature)
         plotting.plot_stat_map(
             feature_img_3d,
             draw_cross=False,
-            colorbar=True,
+            colorbar=colorbar,
             annotate=False,
             threshold=threshold,
             title=features_to_plot[i_feature],
         )
+        if out_dir is not None:
+            out_file = op.join(out_dir, f"{features_to_plot[i_feature]}.tiff")
+            plt.savefig(out_file, bbox_inches="tight", dpi=1000)
+
         plt.show()
 
 
