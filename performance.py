@@ -1,19 +1,51 @@
+import gzip
 import os.path as op
+import pickle
 from difflib import get_close_matches
 from glob import glob
 
 import numpy as np
 import pandas as pd
+from gradec.fetcher import _fetch_features
+from sklearn.feature_extraction.text import TfidfTransformer
 
 
-def _get_semantic_similarity(ic_df, tfidf_df, max_feature, frequency_threshold):
+def _extract_semantic_similarity(max_feature, ic_df, tfidf_df, frequency_threshold):
     include_rows = tfidf_df[max_feature] >= frequency_threshold
     include_tfidf = tfidf_df[max_feature][include_rows]
 
-    ic = ic_df[max_feature].values[0]
-    tfidf = include_tfidf.mean(axis=0)
+    return ic_df[max_feature].values[0], include_tfidf.mean(axis=0)
 
-    return ic, tfidf
+
+def _get_semantic_similarity(
+    model_nm, ic_df, tfidf_df, max_features, frequency_threshold, n_top_terms
+):
+    ic_lst, tfidf_lst = [], []
+    for max_feature in max_features:
+        if model_nm == "term":
+            ic, tfidf = _extract_semantic_similarity(
+                max_feature, ic_df, tfidf_df, frequency_threshold
+            )
+
+        else:
+            sub_max_features = max_feature.split("_")[1:]  # when the index is included
+            assert len(sub_max_features) == n_top_terms
+
+            sub_ic_lst, sub_tfidf_lst = [], []
+            for sub_max_feature in sub_max_features:
+                sub_ic, sub_tfidf = _extract_semantic_similarity(
+                    sub_max_feature, ic_df, tfidf_df, frequency_threshold
+                )
+                sub_ic_lst.append(sub_ic)
+                sub_tfidf_lst.append(sub_tfidf)
+
+            ic = np.sum(sub_ic_lst)
+            tfidf = np.sum(sub_tfidf_lst)
+
+        ic_lst.append(ic)
+        tfidf_lst.append(tfidf)
+
+    return ic_lst, tfidf_lst
 
 
 def _find_category(classification_df, term, idx_col, col_name):
@@ -64,6 +96,15 @@ def neuroquery_annot(features, ns_classification_df, nq_classification_df):
     return classification_df
 
 
+def _nq_term_classifier(data_dir, features, ns_term_class_df, nq_term_class_fn):
+    nq_categories_fn = op.join(data_dir, "raw", "data-neuroquery_version-1_termcategories.csv")
+    nq_categories_df = pd.read_csv(nq_categories_fn)
+
+    result = neuroquery_annot(features, ns_term_class_df, nq_categories_df)
+    result.to_csv(nq_term_class_fn)
+    return result
+
+
 def crowdsourced_annot(crowdsourced_files):
     # Majority voting algorithm
     for i, files in enumerate(crowdsourced_files):
@@ -94,12 +135,12 @@ def term_classifier(terms, terms_classified_df):
     return np.array(classification)
 
 
-def topic_classifier(terms, weights, terms_classified_df):
+def topic_classifier(terms, n_top_terms, weights, terms_classified_df):
     cotegories = np.array(["Functional", "Clinical", "Anatomical", "Non-Specific"])
     classification_lst = []
     for term in terms:
         sub_max_features = term.split("_")[1:]
-        assert len(sub_max_features) == 3
+        assert len(sub_max_features) == n_top_terms
 
         cotegories_count = np.zeros(len(cotegories))
         for sub_max_feature, weight in zip(sub_max_features, weights):
@@ -124,36 +165,42 @@ def topic_classifier(terms, weights, terms_classified_df):
     return np.array(classification_lst), classification_df
 
 
-def classifier(terms, weights, dset, model, dset_name, data_dir):
-    ns_term_class_fn = op.join(data_dir, "term_neurosynth_classification.csv")
+def classifier(terms, n_top_terms, weights, dset_nm, model_nm, data_dir):
+    class_dir = op.join(data_dir, "classification")
+    ns_term_class_fn = op.join(class_dir, "term_neurosynth_classification.csv")
 
     if not op.isfile(ns_term_class_fn):
         crowdsourced_files = sorted(
-            glob(op.join(data_dir, "raw", "CrowdsourcedNeurosynthTermClassifications-*.*"))
+            glob(op.join(class_dir, "raw", "CrowdsourcedNeurosynthTermClassifications-*.*"))
         )
         ns_term_class_df = crowdsourced_annot(crowdsourced_files)
         ns_term_class_df.to_csv(ns_term_class_fn)
     else:
         ns_term_class_df = pd.read_csv(ns_term_class_fn, index_col="FEATURE")
 
-    if dset_name == "neurosynth":
+    if dset_nm == "neurosynth":
         term_class_df = ns_term_class_df.copy()
 
-    elif dset_name == "neuroquery":
-        nq_term_class_fn = op.join(data_dir, "term_neuroquery_classification.csv")
+    elif dset_nm == "neuroquery":
+        nq_term_features = _fetch_features("neuroquery", "term", data_dir=data_dir)
+        nq_term_class_fn = op.join(class_dir, "term_neuroquery_classification.csv")
         nq_term_class_df = (
             pd.read_csv(nq_term_class_fn, index_col="FEATURE")
             if op.isfile(nq_term_class_fn)
-            else _extracted_from_classifier_19(data_dir, dset, ns_term_class_df, nq_term_class_fn)
+            else _nq_term_classifier(
+                class_dir, nq_term_features, ns_term_class_df, nq_term_class_fn
+            )
         )
         term_class_df = nq_term_class_df.copy()
 
-    if model == "term":
+    if model_nm == "term":
         term_classified = term_classifier(terms, term_class_df)
     else:
-        topic_class_fn = op.join(data_dir, f"{model}_{dset_name}_classification.csv")
+        topic_class_fn = op.join(class_dir, f"{model_nm}_{dset_nm}_classification.csv")
         if not op.isfile(topic_class_fn):
-            term_classified, topic_class_df = topic_classifier(terms, weights, term_class_df)
+            term_classified, topic_class_df = topic_classifier(
+                terms, n_top_terms, weights, term_class_df
+            )
             topic_class_df.to_csv(topic_class_fn)
         else:
             topic_class_df = pd.read_csv(topic_class_fn, index_col="FEATURE")
@@ -162,15 +209,58 @@ def classifier(terms, weights, dset, model, dset_name, data_dir):
     return term_classified
 
 
-# TODO Rename this here and in `classifier`
-def _extracted_from_classifier_19(data_dir, dset, ns_term_class_df, nq_term_class_fn):
-    nq_categories_fn = op.join(data_dir, "raw", "data-neuroquery_version-1_termcategories.csv")
-    nq_categories_df = pd.read_csv(nq_categories_fn)
+def _get_ic(counts_df):
+    p_t_c = counts_df.sum(axis=0) / counts_df.values.sum()
+    ic_df = -np.log(p_t_c)
+    ic_df = ic_df.replace([np.inf, -np.inf], 0)
+    ic_df = ic_df.to_frame().T
 
-    feature_names = dset.annotations.columns.values
-    feature_names = [f for f in feature_names if f.startswith("neuroquery6308_combined_tfidf")]
-    features = [f.split("__")[-1] for f in feature_names]
+    return ic_df
 
-    result = neuroquery_annot(features, ns_term_class_df, nq_categories_df)
-    result.to_csv(nq_term_class_fn)
-    return result
+
+def _get_tfidf(counts_df):
+    tfidf_tr = TfidfTransformer()
+    X = counts_df.to_numpy()
+    X_tr = tfidf_tr.fit_transform(X)
+    return pd.DataFrame(X_tr.toarray(), index=counts_df.index, columns=counts_df.columns)
+
+
+def _combine_counts(class_data_dir):
+    ns_counts_df_fn = op.join(class_data_dir, "neurosynth_counts.tsv")
+    nq_counts_df_fn = op.join(class_data_dir, "neuroquery_counts.tsv")
+    ns_counts_df = pd.read_csv(ns_counts_df_fn, delimiter="\t", index_col="id")
+    nq_counts_df = pd.read_csv(nq_counts_df_fn, delimiter="\t", index_col="id")
+
+    counts_df = pd.merge(nq_counts_df, ns_counts_df, how="outer", on=["id"])
+    counts_df = counts_df.fillna(0)
+    for col in counts_df.columns:
+        if (col.endswith("_x") or col.endswith("_y")) and col in counts_df.columns:
+            counts_df[col[:-2]] = counts_df[col[:-2] + "_x"] + counts_df[col[:-2] + "_y"]
+            counts_df.drop([col[:-2] + "_x", col[:-2] + "_y"], axis=1, inplace=True)
+    counts_df = counts_df.sort_index(axis=1)
+    return counts_df
+
+
+def _get_twfrequencies(dset_nm, model_nm, n_top_terms, dec_data_dir):
+    model_fn = op.join(dec_data_dir, f"{model_nm}_{dset_nm}_model.pkl.gz")
+    model_file = gzip.open(model_fn, "rb")
+    model_obj = pickle.load(model_file)
+
+    topic_word_weights = (
+        model_obj.p_word_g_topic_.T
+        if model_nm == "gclda"
+        else model_obj.distributions_["p_topic_g_word"]
+    )
+
+    n_topics = topic_word_weights.shape[0]
+    sorted_weights_idxs = np.argsort(-topic_word_weights, axis=1)
+    frequencies_lst = []
+    for topic_i in range(n_topics):
+        frequencies = topic_word_weights[topic_i, sorted_weights_idxs[topic_i, :]][
+            :n_top_terms
+        ].tolist()
+        frequencies = [freq / np.max(frequencies) for freq in frequencies]
+        frequencies = np.round(frequencies, 3).tolist()
+        frequencies_lst.append(frequencies)
+
+    return frequencies_lst

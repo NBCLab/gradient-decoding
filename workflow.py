@@ -1,6 +1,6 @@
 """Workflow for running the grdient-decoding analyses"""
 import argparse
-import gzip
+import itertools
 import os
 import os.path as op
 import pickle
@@ -11,24 +11,19 @@ import nibabel as nib
 import numpy as np
 import pandas as pd
 from brainspace.gradient import GradientMaps
-from neuromaps import transforms
-from nibabel import GiftiImage
-from nibabel.gifti import GiftiDataArray
-from nilearn import masking
-from nimare.annotate.gclda import GCLDAModel
-from nimare.dataset import Dataset
-from nimare.decode.continuous import CorrelationDecoder
-from nimare.extract import download_abstracts, fetch_neuroquery, fetch_neurosynth
-from nimare.io import convert_neurosynth_to_dataset
-from nimare.meta.cbma import mkda
-from nimare.stats import pearson
-from pymare.stats import fdr
-from sklearn.feature_extraction.text import TfidfTransformer
-from surfplot.utils import add_fslr_medial_wall
+from gradec.decode import GCLDADecoder, LDADecoder, TermDecoder
+from gradec.fetcher import _fetch_features
+from gradec.utils import _conform_features
 
 import utils
-from decoding import _get_counts, annotate_lda, gen_nullsamples
-from performance import _get_semantic_similarity, classifier
+from performance import (
+    _combine_counts,
+    _get_ic,
+    _get_semantic_similarity,
+    _get_tfidf,
+    _get_twfrequencies,
+    classifier,
+)
 from segmentation import (
     KDESegmentation,
     KMeansSegmentation,
@@ -36,6 +31,12 @@ from segmentation import (
     compare_segmentations,
     gradient_to_maps,
 )
+
+DEC_MODELS = {
+    "term": TermDecoder,
+    "lda": LDADecoder,
+    "gclda": GCLDADecoder,
+}
 
 
 def _get_parser():
@@ -72,8 +73,6 @@ def hcp_gradient(data_dir, template_dir, principal_gradient_fn, pypackage="mapal
     -------
     None : :obj:``
     """
-    full_vertices = 64984
-    hemi_vertices = int(full_vertices / 2)
     output_dir = op.dirname(principal_gradient_fn)
     os.makedirs(output_dir, exist_ok=True)
 
@@ -119,60 +118,14 @@ def hcp_gradient(data_dir, template_dir, principal_gradient_fn, pypackage="mapal
     # Load subcortical volume
     subcortical_fn = op.join(template_dir, "rois-subcortical_mni152_mask.nii.gz")
     subcort_img = nib.load(subcortical_fn)
-    subcort_dat = subcort_img.get_fdata()
-    subcort_mask = subcort_dat != 0
-    n_subcort_vox = np.where(subcort_mask)[0].shape[0]
 
-    n_gradients = gradients.shape[1]
-    for i in range(n_gradients):
-        # Exclude 31,870 voxels form subcortical structures as represented in volumetric space
-        # = 59,412 excluding the medial wall
-        subcort_grads = gradients[gradients.shape[0] - n_subcort_vox :, i]
-        cort_grads = gradients[: gradients.shape[0] - n_subcort_vox, i]
-
-        if i == 0:
-            # Save principal gradient
-            principal_gradient = cort_grads.copy()
-            np.save(principal_gradient_fn, principal_gradient)
-
-        # Add the medial wall: 32,492 X 32,492 grayordinates = 64,984, for visualization purposes
-        # Get left and rigth hemisphere gradient scores, and insert 0's where medial wall is
-        grad_map_full = add_fslr_medial_wall(cort_grads, split=False)
-        gradients_lh, gradients_rh = grad_map_full[:hemi_vertices], grad_map_full[hemi_vertices:]
-
-        grad_img_lh = GiftiImage()
-        grad_img_rh = GiftiImage()
-        grad_img_lh.add_gifti_data_array(GiftiDataArray(gradients_lh))
-        grad_img_rh.add_gifti_data_array(GiftiDataArray(gradients_rh))
-
-        subcort_grads_fn = op.join(
-            output_dir,
-            "source-jperaza2022_desc-fcG{:02d}_space-MNI152_den-2mm_feature.nii.gz".format(i),
-        )
-        gradients_lh_fn = op.join(
-            output_dir,
-            "source-jperaza2022_desc-fcG{:02d}_space-fsLR_den-32k_hemi-L_feature.func.gii".format(
-                i
-            ),
-        )
-        gradients_rh_fn = op.join(
-            output_dir,
-            "source-jperaza2022_desc-fcG{:02d}_space-fsLR_den-32k_hemi-R_feature.func.gii".format(
-                i
-            ),
-        )
-
-        # Write subcortical gradient to Nifti file
-        new_subcort_dat = np.zeros_like(subcort_dat)
-        new_subcort_dat[subcort_mask] = subcort_grads
-        new_subcort_img = nib.Nifti1Image(new_subcort_dat, subcort_img.affine, subcort_img.header)
-        new_subcort_img.to_filename(subcort_grads_fn)
-
-        # Write cortical gradient to Gifti file
-        nib.save(grad_img_lh, gradients_lh_fn)
-        nib.save(grad_img_rh, gradients_rh_fn)
-
-    return principal_gradient
+    utils._gradient_to_nifti(gradients, subcort_img, output_dir)
+    return utils._gradient_to_gifti(
+        gradients,
+        subcort_img,
+        principal_gradient_fn,
+        output_dir,
+    )
 
 
 def gradient_segmentation(gradient, grad_seg_fn, n_segments):
@@ -251,7 +204,7 @@ def gradient_segmentation(gradient, grad_seg_fn, n_segments):
     return grad_seg_dict
 
 
-def gradient_decoding(data_dir, output_dir, grad_seg_dict, n_cores):
+def gradient_decoding(data_dir, grad_seg_dict, output_dir, n_cores):
     """3. Meta-Analytic Functional Decoding: Implement six different decoding strategies and
     perform an optimization test to identify the segment size to split the gradient for each
     strategy.
@@ -268,347 +221,24 @@ def gradient_decoding(data_dir, output_dir, grad_seg_dict, n_cores):
     -------
     None : :obj:``
     """
-    neuromaps_dir = op.join(data_dir, "neuromaps-data")
-    ma_data_dir = op.join(data_dir, "meta-analysis")
-    os.makedirs(ma_data_dir, exist_ok=True)
-    os.makedirs(output_dir, exist_ok=True)
+    N_SAMPLES = 1000
+    dset_nms = ["neurosynth", "neuroquery"]
+    model_nms = ["term", "lda", "gclda"]
+    segnt_nms = ["Percentile", "KMeans", "KDE"]
+    for dset_nm, model_nm, segnt_nm in itertools.product(dset_nms, model_nms, segnt_nms):
+        corr_dir = op.join(output_dir, f"{dset_nm}_{model_nm}_corr_{segnt_nm}")
+        os.makedirs(corr_dir, exist_ok=True)
 
-    n_vertices = 59412  # TODO: 59412 is harcoded here
-    n_permutations = 1000
-    n_topics = 200
-    nullsamples_fn = op.join(output_dir, "null_samples_fslr.npy")
-    if not op.isfile(nullsamples_fn):
-        nullsamples = gen_nullsamples(neuromaps_dir, n_samples=n_permutations, n_cores=n_cores)
-        np.save(nullsamples_fn, nullsamples)
-    else:
-        nullsamples = np.load(nullsamples_fn)
+        grad_segments = grad_seg_dict[f"{segnt_nm.lower()}_grad_segments"]
+        for grad_maps in grad_segments:
+            decode = DEC_MODELS[model_nm](n_samples=N_SAMPLES, data_dir=data_dir, n_cores=n_cores)
+            decode.fit(dset_nm)
+            corrs_df, pvals_df, pvals_FDR_df = decode.transform(grad_maps, method="correlation")
 
-    # dset_names = ["neurosynth", "neuroquery"]
-    # sources = ["term", "lda", "gclda"]
-    # methods = ["Percentile", "KMeans", "KDE"]
-    dset_names = ["neuroquery"]
-    sources = ["gclda"]
-    methods = ["Percentile"]
-    for dset_name in dset_names:
-        dset_fn = os.path.join(ma_data_dir, f"{dset_name}_dataset.pkl.gz")
-        if not os.path.isfile(dset_fn):
-            print(f"\tFetching {dset_name} database...", flush=True)
-            if dset_name == "neurosynth":
-                files = fetch_neurosynth(
-                    data_dir=ma_data_dir,
-                    version="7",
-                    overwrite=False,
-                    source="abstract",
-                    vocab="terms",
-                )
-            elif dset_name == "neuroquery":
-                files = fetch_neuroquery(
-                    data_dir=data_dir,
-                    version="1",
-                    overwrite=False,
-                    source="combined",
-                    vocab="neuroquery6308",
-                    type="tfidf",
-                )
-
-            dataset_db = files[0]
-
-            dset = convert_neurosynth_to_dataset(
-                coordinates_file=dataset_db["coordinates"],
-                metadata_file=dataset_db["metadata"],
-                annotations_files=dataset_db["features"],
-            )
-            dset.save(dset_fn)
-        else:
-            print(f"\tLoading {dset_name} database...", flush=True)
-            dset = Dataset.load(dset_fn)
-
-        # Check whether dset contain text for LDA-based models
-        if dset_name == "neurosynth":
-            if "abstract" in dset.texts:
-                # Download Neurosynth abstract
-                print(f"\t\tDataset {dset_name} contains abstract", flush=True)
-            else:
-                print(f"\t\tDownloading abstract to {dset_name} dset", flush=True)
-                dset = download_abstracts(dset, "jpera054@fiu.edu")
-                dset.save(dset_fn)
-        elif dset_name == "neuroquery":
-            # LDA model will be run on word_counts, so the text is not needed
-            pass
-
-        if dset.basepath is None:
-            basepath_path = op.join(ma_data_dir, f"{dset_name}_basepath")
-            os.makedirs(basepath_path, exist_ok=True)
-            dset.update_path(basepath_path)
-
-        for source in sources:
-            if source == "term":
-                # Term-based meta-analysis
-                if dset_name == "neurosynth":
-                    feature_group = "terms_abstract_tfidf"
-                elif dset_name == "neuroquery":
-                    feature_group = "neuroquery6308_combined_tfidf"
-                frequency_threshold = 0.001
-
-            if source == "lda":
-                # LDA-based meta-analysis
-                feature_group = f"LDA{n_topics}"
-                frequency_threshold = 0.05
-
-            if (source == "term") or (source == "lda"):
-                decoder_fn = op.join(output_dir, f"{source}_{dset_name}_decoder.pkl.gz")
-                if not op.isfile(decoder_fn):
-                    if source == "lda":
-                        print(f"\tRunning LDA model on {dset_name}...", flush=True)
-                        # n_cores=1 for LDA.
-                        # See: https://github.com/scikit-learn/scikit-learn/issues/8943
-                        new_dset_fn = dset_fn.split("_dataset.pkl.gz")[0] + "_lda_dataset.pkl.gz"
-                        if not op.isfile(new_dset_fn):
-                            lda_based_model_fn = op.join(
-                                output_dir, f"lda_{dset_name}_model.pkl.gz"
-                            )
-                            dset = annotate_lda(
-                                dset,
-                                dset_name,
-                                ma_data_dir,
-                                lda_based_model_fn,
-                                n_topics=n_topics,
-                                n_cores=1,
-                            )
-                            dset.save(new_dset_fn)
-                        else:
-                            dset = Dataset.load(new_dset_fn)
-
-                    print(
-                        f"\tPerforming {source.upper()}-based meta-analysis on {dset_name}...",
-                        flush=True,
-                    )
-                    decoder = CorrelationDecoder(
-                        frequency_threshold=frequency_threshold,
-                        meta_estimator=mkda.MKDAChi2,
-                        feature_group=feature_group,
-                        target_image="z_desc-specificity",
-                        n_cores=n_cores,
-                    )
-                    decoder.fit(dset)
-                    decoder.save(decoder_fn, compress=True)
-                else:
-                    print(
-                        f"\tLoading {source.upper()}-based meta-analytic maps from {dset_name}...",
-                        flush=True,
-                    )
-                    decoder_file = gzip.open(decoder_fn, "rb")
-                    decoder = pickle.load(decoder_file)
-
-            elif source == "gclda":
-                # GCLDA-based meta-analysis
-                gclda_based_model_fn = op.join(output_dir, f"gclda_{dset_name}_model.pkl.gz")
-                if not op.isfile(gclda_based_model_fn):
-                    print(f"\tRunning GCLDA model on {dset_name}...", flush=True)
-                    n_iters = 20000
-                    counts_df = _get_counts(dset, dset_name, ma_data_dir)
-                    counts_df_fn = op.join(output_dir, f"{dset_name}_counts.tsv")
-                    counts_df.to_csv(counts_df_fn, sep="\t")
-
-                    gclda_model = GCLDAModel(
-                        counts_df,
-                        dset.coordinates,
-                        mask=dset.masker.mask_img,
-                        n_topics=n_topics,
-                        n_regions=4,
-                        symmetric=True,
-                        n_cores=n_cores,
-                    )
-                    gclda_model.fit(n_iters=n_iters, loglikely_freq=100)
-                    gclda_model.save(gclda_based_model_fn, compress=True)
-                else:
-                    print(
-                        f"\tLoading GCLDA-based meta-analytic maps from {dset_name}...", flush=True
-                    )
-                    gclda_decoder_file = gzip.open(gclda_based_model_fn, "rb")
-                    gclda_model = pickle.load(gclda_decoder_file)
-
-            # Get meta-analytic maps
-            if (source == "term") or (source == "lda"):
-                meta_arr = decoder.images_
-            elif source == "gclda":
-                meta_arr = gclda_model.p_voxel_g_topic_.T
-
-            n_metamaps = meta_arr.shape[0]
-            meta_map_fn = op.join(output_dir, f"{source}_{dset_name}_metamaps.npy")
-            meta_null_fn = op.join(output_dir, f"{source}_{dset_name}_metamaps-nulls.npy")
-            if op.isfile(meta_map_fn) and op.isfile(meta_null_fn):
-                print("\tLoading meta-analytic and null maps...", flush=True)
-                meta_maps_fslr_arr = np.load(meta_map_fn)
-                if n_metamaps > 200:
-                    meta_maps_permuted_arr = np.memmap(
-                        meta_null_fn,
-                        dtype="float32",
-                        mode="r",
-                        shape=(n_metamaps, n_vertices, n_permutations),
-                    )
-                else:
-                    meta_maps_permuted_arr = np.load(meta_null_fn)
-            else:
-                print("\tTransforming meta-analytic and null maps to fsLR...", flush=True)
-                meta_maps_fslr_arr = np.zeros((n_metamaps, n_vertices))
-                if n_metamaps > 200:
-                    meta_maps_permuted_arr = np.memmap(
-                        meta_null_fn,
-                        dtype="float32",
-                        mode="w+",
-                        shape=(n_metamaps, n_vertices, n_permutations),
-                    )
-                else:
-                    meta_maps_permuted_arr = np.zeros((n_metamaps, n_vertices, n_permutations))
-
-                for metamap_i in range(n_metamaps):
-                    print(metamap_i, flush=True)
-                    fslr_dir = op.join(output_dir, f"{source}_{dset_name}_fslr")
-                    os.makedirs(fslr_dir, exist_ok=True)
-
-                    if (source == "gclda") or (source == "lda"):
-                        desc_name = "desc-topic{:03d}".format(metamap_i + 1)
-                    elif source == "term":
-                        desc_name = "desc-term{:04d}".format(metamap_i + 1)
-
-                    meta_map_lh_fn = op.join(
-                        fslr_dir,
-                        f"source-{source}_dset-{dset_name}_{desc_name}"
-                        "_space-fsLR_den-32k_hemi-L_feature.func.gii",
-                    )
-                    meta_map_rh_fn = op.join(
-                        fslr_dir,
-                        f"source-{source}_dset-{dset_name}_{desc_name}"
-                        "_space-fsLR_den-32k_hemi-R_feature.func.gii",
-                    )
-
-                    if op.isfile(meta_map_lh_fn) and op.isfile(meta_map_rh_fn):
-                        meta_map_lh = nib.load(meta_map_lh_fn)
-                        meta_map_rh = nib.load(meta_map_rh_fn)
-                    else:
-                        if (source == "term") or (source == "lda"):
-                            meta_map = decoder.masker.inverse_transform(meta_arr[metamap_i, :])
-                        elif source == "gclda":
-                            meta_map = masking.unmask(meta_arr[metamap_i, :], gclda_model.mask)
-
-                        meta_map_lh, meta_map_rh = transforms.mni152_to_fslr(meta_map)
-
-                        meta_map_lh, meta_map_rh = utils.zero_fslr_medial_wall(
-                            meta_map_lh, meta_map_rh, neuromaps_dir
-                        )
-
-                        # Write cortical gradient to Gifti files
-                        nib.save(meta_map_lh, meta_map_lh_fn)
-                        nib.save(meta_map_rh, meta_map_rh_fn)
-
-                        del meta_map
-
-                    meta_map_arr_lh = meta_map_lh.agg_data()
-                    meta_map_arr_rh = meta_map_rh.agg_data()
-
-                    meta_map_fslr = utils.rm_fslr_medial_wall(
-                        meta_map_arr_lh, meta_map_arr_rh, neuromaps_dir
-                    )
-
-                    meta_maps_fslr_arr[metamap_i, :] = meta_map_fslr
-                    meta_maps_permuted_arr[metamap_i, :, :] = meta_map_fslr[nullsamples]
-
-                np.save(meta_map_fn, meta_maps_fslr_arr)
-                if n_metamaps > 200:
-                    meta_maps_permuted_arr.flush()
-                else:
-                    np.save(meta_null_fn, meta_maps_permuted_arr)
-
-                del (
-                    meta_arr,
-                    meta_map_fslr,
-                    nullsamples,
-                    meta_map_arr_lh,
-                    meta_map_arr_rh,
-                    meta_map_lh,
-                    meta_map_rh,
-                )
-
-            if (source == "term") or (source == "lda"):
-                del decoder
-            elif source == "gclda":
-                del gclda_model
-
-            null_dir = op.join(output_dir, f"{source}_{dset_name}_null")
-            os.makedirs(null_dir, exist_ok=True)
-            for perm_i in range(n_permutations):
-                meta_null_i_fn = op.join(
-                    null_dir, "{}_{}_metanull-{:04d}.npy".format(source, dset_name, perm_i + 1)
-                )
-                if not op.isfile(meta_null_i_fn):
-                    np.save(meta_null_i_fn, meta_maps_permuted_arr[:, :, perm_i])
-
-            del meta_maps_permuted_arr
-
-            # Correlate meta-analytic maps with segmented maps
-            for method in methods:
-                corr_dir = op.join(output_dir, f"{source}_{dset_name}_corr_{method}")
-                os.makedirs(corr_dir, exist_ok=True)
-
-                grad_segments = grad_seg_dict[f"{method.lower()}_grad_segments"]
-
-                n_segmentations = len(grad_segments)
-                for segmentation_i in range(n_segmentations):
-                    n_segments = len(grad_segments[segmentation_i])
-
-                    corrs_sol_fn = op.join(corr_dir, "{:02d}_corr.npy".format(segmentation_i + 3))
-                    corrs_null_fn = op.join(corr_dir, "{:02d}_null.npy".format(segmentation_i + 3))
-                    corrs_pval_fn = op.join(corr_dir, "{:02d}_pval.npy".format(segmentation_i + 3))
-
-                    if op.isfile(corrs_sol_fn) and op.isfile(corrs_null_fn):
-                        corrs_sol_arr = np.load(corrs_sol_fn)
-                        corrs_null_arr = np.load(corrs_null_fn)
-                    else:
-                        corrs_sol_arr = np.zeros((n_segments, n_metamaps))
-                        corrs_null_arr = np.zeros((n_segments, n_metamaps, n_permutations))
-                        for segment_i in range(n_segments):
-                            corrs_sol_arr[segment_i, :] = pearson(
-                                grad_segments[segmentation_i][segment_i], meta_maps_fslr_arr
-                            )
-
-                            # Claculate null correlation coeficients
-                            for perm_i in range(n_permutations):
-                                meta_null_i_fn = op.join(
-                                    null_dir,
-                                    "{}_{}_metanull-{:04d}.npy".format(
-                                        source, dset_name, perm_i + 1
-                                    ),
-                                )
-                                meta_null_arr_i = np.load(meta_null_i_fn)
-
-                                corrs_null_arr[segment_i, :, perm_i] = pearson(
-                                    grad_segments[segmentation_i][segment_i],
-                                    meta_null_arr_i,
-                                )
-
-                        np.save(corrs_sol_fn, corrs_sol_arr)
-                        np.save(corrs_null_fn, corrs_null_arr)
-
-                    if not op.isfile(corrs_pval_fn):
-                        corrs_pval_arr = np.zeros((n_segments, n_metamaps))
-                        # Calculate p-value of correlations
-                        for segment_i in range(n_segments):
-                            for metamap_i in range(n_metamaps):
-                                true_corr = corrs_sol_arr[segment_i, metamap_i]
-                                null_corr = corrs_null_arr[segment_i, metamap_i, :]
-
-                                if true_corr > 0:
-                                    summation = null_corr[null_corr > true_corr].sum()
-                                else:
-                                    summation = null_corr[null_corr < true_corr].sum()
-
-                                p_value = abs(summation / n_permutations)
-                                corrs_pval_arr[segment_i, metamap_i] = p_value
-
-                        np.save(corrs_pval_fn, corrs_pval_arr)
-
-    return None
+            n_segments = len(grad_maps)
+            corrs_df.to_csv(op.join(corr_dir, f"corrs_{n_segments:02d}.csv"))
+            pvals_df.to_csv(op.join(corr_dir, f"pvals_{n_segments:02d}.csv"))
+            pvals_FDR_df.to_csv(op.join(corr_dir, f"pvals-FDR_{n_segments:02d}.csv"))
 
 
 def decoding_performance(data_dir, dec_data_dir, output_dir):
@@ -629,53 +259,36 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
     None : :obj:``
     """
     os.makedirs(output_dir, exist_ok=True)
-    ma_data_dir = op.join(data_dir, "meta-analysis")
-    class_data_dir = op.join(data_dir, "classification")
+    models_dir = op.join(data_dir, "models")
 
-    counts_df_fn = op.join(dec_data_dir, "nsnq_counts.tsv")
-    ic_df_fn = op.join(dec_data_dir, "nsnq_ic.tsv")
-    tfidf_df_fn = op.join(dec_data_dir, "nsnq_tfidf.tsv")
+    counts_df_fn = op.join(output_dir, "nsnq_counts.tsv")
     if not op.isfile(counts_df_fn):
         # Generate counts of combined dataset
-        ns_counts_df_fn = op.join(dec_data_dir, "neurosynth_counts.tsv")
-        nq_counts_df_fn = op.join(dec_data_dir, "neuroquery_counts.tsv")
-        ns_counts_df = pd.read_csv(ns_counts_df_fn, delimiter="\t", index_col="id")
-        nq_counts_df = pd.read_csv(nq_counts_df_fn, delimiter="\t", index_col="id")
-
-        counts_df = pd.merge(nq_counts_df, ns_counts_df, how="outer", on=["id"])
-        counts_df = counts_df.fillna(0)
-        for col in counts_df.columns:
-            if col.endswith("_x") or col.endswith("_y"):
-                if col in counts_df.columns:
-                    counts_df[col[:-2]] = counts_df[col[:-2] + "_x"] + counts_df[col[:-2] + "_y"]
-                    counts_df.drop([col[:-2] + "_x", col[:-2] + "_y"], axis=1, inplace=True)
-        counts_df = counts_df.sort_index(axis=1)
+        counts_df = _combine_counts(output_dir)
         counts_df.to_csv(counts_df_fn, sep="\t")
     else:
         counts_df = pd.read_csv(counts_df_fn, delimiter="\t", index_col="id")
 
+    ic_df_fn = op.join(output_dir, "nsnq_ic.tsv")
     if not op.isfile(ic_df_fn):
-        p_t_c = counts_df.sum(axis=0) / counts_df.values.sum()
-        ic_df = -np.log(p_t_c)
-        ic_df = ic_df.replace([np.inf, -np.inf], 0)
-        ic_df = ic_df.to_frame().T
+        ic_df = _get_ic(counts_df)
         ic_df.to_csv(ic_df_fn, sep="\t", index=False)
     else:
         ic_df = pd.read_csv(ic_df_fn, delimiter="\t")
 
+    tfidf_df_fn = op.join(output_dir, "nsnq_tfidf.tsv")
     if not op.isfile(tfidf_df_fn):
-        tfidf_tr = TfidfTransformer()
-        X = counts_df.to_numpy()
-        X_tr = tfidf_tr.fit_transform(X)
-        tfidf_df = pd.DataFrame(X_tr.toarray(), index=counts_df.index, columns=counts_df.columns)
+        tfidf_df = _get_tfidf(counts_df)
         tfidf_df.to_csv(tfidf_df_fn, sep="\t")
     else:
         tfidf_df = pd.read_csv(tfidf_df_fn, delimiter="\t", index_col="id")
 
-    methods = ["Percentile", "KMeans", "KDE"]
-    dset_names = ["neurosynth", "neuroquery"]
-    models = ["term", "lda", "gclda"]
-
+    frequency_threshold = 0.001
+    N_TOP_WORDS = 3
+    dset_nms = ["neurosynth", "neuroquery"]
+    # model_nms = ["term", "lda", "gclda"]
+    model_nms = ["lda", "gclda"]
+    segnt_nms = ["Percentile", "KMeans", "KDE"]
     (
         max_corr_lst,
         idx_lst,
@@ -695,197 +308,100 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
         mean_method_lst,
         snr_lst,
     ) = ([] for _ in range(17))
-    for dset_name in dset_names:
-        dset_fn = os.path.join(ma_data_dir, f"{dset_name}_dataset.pkl.gz")
-        dset = Dataset.load(dset_fn)
-        frequency_threshold = 0.001
+    for dset_nm, model_nm in itertools.product(dset_nms, model_nms):
+        # Get topic-wise frequencies
+        # We don't need weights for classifying terms
+        frequencies = (
+            _get_twfrequencies(dset_nm, model_nm, N_TOP_WORDS, models_dir)
+            if model_nm in ["lda", "gclda"]
+            else None
+        )
 
-        for model in models:
-            if (model == "lda") or (model == "gclda"):
-                model_fn = op.join(dec_data_dir, f"{model}_{dset_name}_model.pkl.gz")
-                model_file = gzip.open(model_fn, "rb")
-                model_obj = pickle.load(model_file)
+        # Get and classify features
+        features = _fetch_features(dset_nm, model_nm, data_dir=data_dir)
+        features = _conform_features(features, N_TOP_WORDS, model_nm)
+        features_arr = np.array(features)
+        features_classified = classifier(
+            features_arr, N_TOP_WORDS, frequencies, dset_nm, model_nm, data_dir
+        )
 
-                topic_word_weights = (
-                    model_obj.p_word_g_topic_.T
-                    if model == "gclda"
-                    else model_obj.distributions_["p_topic_g_word"]
+        for segnt_nm in segnt_nms:
+            corr_dir = op.join(dec_data_dir, f"{dset_nm}_{model_nm}_corr_{segnt_nm}")
+            corr_lst = sorted(glob(op.join(corr_dir, "corrs_*.csv")))
+            pval_lst = sorted(glob(op.join(corr_dir, "pvals_*.csv")))
+            pval_fdr_lst = sorted(glob(op.join(corr_dir, "pvals-FDR_*.csv")))
+
+            for corr_fn, pval_fn, pval_fdr_fn in zip(corr_lst, pval_lst, pval_fdr_lst):
+                corr_df = pd.read_csv(corr_fn, index_col="feature")
+                pval_df = pd.read_csv(pval_fn, index_col="feature")
+                pval_fdr_df = pd.read_csv(pval_fdr_fn, index_col="feature")
+
+                # Get maximum correlation and corresponding feature
+                max_df = corr_df.idxmax()
+                max_idx = corr_df.index.get_indexer(max_df.values)
+                max_corr = np.diag(corr_df.loc[max_df.values, max_df.index])
+                max_pval = np.diag(pval_df.loc[max_df.values, max_df.index])
+                max_fdr_pval = np.diag(pval_fdr_df.loc[max_df.values, max_df.index])
+                max_features = max_df.values
+                max_feature_clss = features_classified[max_idx]
+
+                # Get information content, and tfidf per max features
+                n_seg = corr_df.shape[1]
+                segments = np.arange(1, n_seg + 1)
+                temp_ic_lst, temp_tfidf_lst = _get_semantic_similarity(
+                    model_nm,
+                    ic_df,
+                    tfidf_df,
+                    max_features,
+                    frequency_threshold,
+                    N_TOP_WORDS,
                 )
 
-                n_topics = topic_word_weights.shape[0]
-                sorted_weights_idxs = np.argsort(-topic_word_weights, axis=1)
-                frequencies_lst = []
-                for topic_i in range(n_topics):
-                    frequencies = topic_word_weights[topic_i, sorted_weights_idxs[topic_i, :]][
-                        :3
-                    ].tolist()
-                    frequencies = [freq / np.max(frequencies) for freq in frequencies]
-                    frequencies = np.round(frequencies, 3).tolist()
-                    frequencies_lst.append(frequencies)
-            else:
-                frequencies = None
+                # Calculate SNR per max features
+                snr = sum(np.array(max_feature_clss) == "Functional") / len(max_feature_clss)
 
-            if (model == "lda") or (model == "term"):
-                decoder_fn = op.join(dec_data_dir, f"{model}_{dset_name}_decoder.pkl.gz")
-                decoder_file = gzip.open(decoder_fn, "rb")
-                decoder = pickle.load(decoder_file)
-                feature_names = decoder.features_
-                features = [f.split("__")[-1] for f in feature_names]
-            elif model == "gclda":
-                vocabulary = np.array(model_obj.vocabulary)
-                feature_names = [
-                    "_".join(vocabulary[sorted_weights_idxs[topic_i, :]][:3])
-                    for topic_i in range(n_topics)
-                ]
-                features = [f"{i + 1}_{feature_names[i]}" for i in range(n_topics)]
+                # Append values for performance DF
+                method_lst.append([f"{model_nm}_{dset_nm}_{segnt_nm}"] * n_seg)
+                segments_lst.append(segments)
+                seg_sol_lst.append([f"{n_seg}"] * n_seg)
+                max_corr_lst.append(max_corr)
+                max_pval_lst.append(max_pval)
+                max_fdr_pval_lst.append(max_fdr_pval)
+                idx_lst.append(max_idx)
+                feature_lst.append(max_features)
+                ic_lst.append(temp_ic_lst)
+                tfidf_lst.append(temp_tfidf_lst)
+                classification_lst.append(max_feature_clss)
 
-            features_arr = np.array(features)
-            features_classified = classifier(
-                features_arr, frequencies, dset, model, dset_name, class_data_dir
-            )
+                # Append values for average performance DF
+                mean_method_lst.append(f"{model_nm}_{dset_nm}_{segnt_nm}")
+                mean_seg_sol_lst.append(f"{n_seg}")
+                mean_corr_lst.append(np.mean(max_corr))
+                mean_ic_lst.append(np.mean(temp_ic_lst))
+                mean_tfidf_lst.append(np.mean(temp_tfidf_lst))
+                snr_lst.append(snr)
 
-            for method in methods:
-                corr_dir = op.join(dec_data_dir, f"{model}_{dset_name}_corr_{method}")
-                corr_lst = sorted(glob(op.join(corr_dir, "*_corr.npy")))
-                pval_lst = sorted(glob(op.join(corr_dir, "*_pval.npy")))
-
-                for file_i, corr_file in enumerate(corr_lst):
-                    corr_arr = np.load(corr_file)
-                    pval_arr = np.load(pval_lst[file_i])
-
-                    sub_corr_pvals = []
-                    for seg_id in range(corr_arr.shape[0]):
-                        result_df = pd.DataFrame()
-                        corr_pvals = fdr(pval_arr[seg_id, :])
-                        sub_corr_pvals.append(corr_pvals)
-
-                        result_df["corr"] = corr_arr[seg_id, :]
-                        result_df["pval"] = pval_arr[seg_id, :]
-                        result_df["fdr_pval"] = corr_pvals
-                        result_df["feature"] = features_arr
-                        result_df["classification"] = features_classified
-                        if (model == "lda") or (model == "gclda"):
-                            result_df["frequencies"] = frequencies_lst
-
-                        result_df.to_csv(
-                            op.join(
-                                corr_dir,
-                                f"{file_i+3:02d}-{seg_id+1:02d}.tsv",
-                            ),
-                            sep="\t",
-                        )
-                    sub_corr_pvals = np.vstack(sub_corr_pvals)
-
-                    max_idx = corr_arr.argmax(axis=1)
-
-                    max_corr = corr_arr[np.arange(corr_arr.shape[0]), max_idx]
-                    max_pval = pval_arr[np.arange(pval_arr.shape[0]), max_idx]
-                    max_fdr_pval = sub_corr_pvals[np.arange(sub_corr_pvals.shape[0]), max_idx]
-                    max_features = features_arr[max_idx]
-                    max_feature_clss = features_classified[max_idx]
-                    n_seg = max_corr.shape[0]
-                    segments = np.arange(1, n_seg + 1)
-                    # segments = segments/segments.max()
-                    temp_ic_lst = []
-                    temp_tfidf_lst = []
-                    temp_classification_lst = []
-                    if model == "term":
-                        for max_feature, max_feature_cl in zip(max_features, max_feature_clss):
-                            ic, tfidf = _get_semantic_similarity(
-                                ic_df, tfidf_df, max_feature, frequency_threshold
-                            )
-
-                            temp_ic_lst.append(ic)
-                            temp_tfidf_lst.append(tfidf)
-                            temp_classification_lst.append(max_feature_cl)
-                    else:
-                        for max_feature, max_feature_cl in zip(max_features, max_feature_clss):
-                            # For topic-based decoder select the top 3 word to determine metrics
-                            sub_max_features = max_feature.split("_")[1:]
-                            assert len(sub_max_features) == 3
-
-                            sub_ic_lst = []
-                            sub_tfidf_lst = []
-                            for sub_max_feature in sub_max_features:
-                                ic, tfidf = _get_semantic_similarity(
-                                    ic_df,
-                                    tfidf_df,
-                                    sub_max_feature,
-                                    frequency_threshold,
-                                )
-                                sub_ic_lst.append(ic)
-                                sub_tfidf_lst.append(tfidf)
-
-                            temp_ic_lst.append(np.sum(sub_ic_lst))
-                            temp_tfidf_lst.append(np.sum(sub_tfidf_lst))
-                            temp_classification_lst.append(max_feature_cl)
-
-                    max_corr_lst.append(max_corr)
-                    idx_lst.append(max_idx)
-                    feature_lst.append(max_features)
-                    max_pval_lst.append(max_pval)
-                    max_fdr_pval_lst.append(max_fdr_pval)
-                    segments_lst.append(segments)
-                    ic_lst.append(temp_ic_lst)
-                    tfidf_lst.append(temp_tfidf_lst)
-                    classification_lst.append(temp_classification_lst)
-
-                    method_slst = [f"{model}_{dset_name}_{method}"] * n_seg
-                    method_lst.append(method_slst)
-                    seg_sol_slst = [f"{file_i+3}"] * n_seg
-                    seg_sol_lst.append(seg_sol_slst)
-
-                    snr = sum(np.array(temp_classification_lst) == "Functional") / len(
-                        temp_classification_lst
-                    )
-                    mean_method_lst.append(f"{model}_{dset_name}_{method}")
-                    mean_seg_sol_lst.append(f"{file_i+3}")
-                    mean_corr_lst.append(np.mean(max_corr))
-                    mean_ic_lst.append(np.mean(temp_ic_lst))
-                    mean_tfidf_lst.append(np.mean(temp_tfidf_lst))
-                    snr_lst.append(snr)
-
-    max_corr_lst = np.hstack(max_corr_lst)
-    idx_lst = np.hstack(idx_lst)
-    feature_lst = np.hstack(feature_lst)
-    max_pval_lst = np.hstack(max_pval_lst)
-    max_fdr_pval_lst = np.hstack(max_fdr_pval_lst)
-    segments_lst = np.hstack(segments_lst)
-    seg_sol_lst = np.hstack(seg_sol_lst)
-    method_lst = np.hstack(method_lst)
-    ic_lst = np.hstack(ic_lst)
-    tfidf_lst = np.hstack(tfidf_lst)
-    classification_lst = np.hstack(classification_lst)
-
-    mean_method_lst = np.hstack(mean_method_lst)
-    mean_corr_lst = np.hstack(mean_corr_lst)
-    mean_ic_lst = np.hstack(mean_ic_lst)
-    mean_tfidf_lst = np.hstack(mean_tfidf_lst)
-    snr_lst = np.hstack(snr_lst)
-
+    # Initialize performance DF
     data_df = pd.DataFrame()
-    data_df["method"] = method_lst
-    data_df["segment"] = segments_lst
-    data_df["segment_solution"] = seg_sol_lst
-    data_df["max_corr"] = max_corr_lst
-    data_df["pvalue"] = max_pval_lst
-    data_df["fdr_pvalue"] = max_fdr_pval_lst
-    data_df["corr_idx"] = idx_lst
-    data_df["features"] = feature_lst
-    data_df["information_content"] = ic_lst
-    data_df["tfidf"] = tfidf_lst
-    data_df["classification"] = classification_lst
+    data_df["method"] = np.hstack(method_lst)
+    data_df["segment"] = np.hstack(segments_lst)
+    data_df["segment_solution"] = np.hstack(seg_sol_lst)
+    data_df["max_corr"] = np.hstack(max_corr_lst)
+    data_df["pvalue"] = np.hstack(max_pval_lst)
+    data_df["fdr_pvalue"] = np.hstack(max_fdr_pval_lst)
+    data_df["corr_idx"] = np.hstack(idx_lst)
+    data_df["features"] = np.hstack(feature_lst)
+    data_df["information_content"] = np.hstack(ic_lst)
+    data_df["tfidf"] = np.hstack(tfidf_lst)
+    data_df["classification"] = np.hstack(classification_lst)
 
     mean_data_df = pd.DataFrame()
-    mean_data_df["method"] = mean_method_lst
+    mean_data_df["method"] = np.hstack(mean_method_lst)
     mean_data_df["segment_solution"] = mean_seg_sol_lst
-    mean_data_df["max_corr"] = mean_corr_lst
-    mean_data_df["ic"] = mean_ic_lst
-    mean_data_df["tfidf"] = mean_tfidf_lst
-    mean_data_df["snr"] = snr_lst
-
-    data_df.to_csv(op.join(output_dir, "performance.tsv"), sep="\t")
-    mean_data_df.to_csv(op.join(output_dir, "mean_performance.tsv"), sep="\t")
+    mean_data_df["max_corr"] = np.hstack(mean_corr_lst)
+    mean_data_df["ic"] = np.hstack(mean_ic_lst)
+    mean_data_df["tfidf"] = np.hstack(mean_tfidf_lst)
+    mean_data_df["snr"] = np.hstack(snr_lst)
 
     return data_df, mean_data_df
 
@@ -908,23 +424,25 @@ def decoding_results():
 
 
 def main(project_dir, n_cores):
-    # Define Paths
-    # =============
     n_cores = int(n_cores)
     project_dir = op.abspath(project_dir)
+
+    # Define Paths
+    # =============
+    results_dir = op.join(project_dir, "results")
     data_dir = op.join(project_dir, "data")
+    gradient_dir = op.join(results_dir, "gradient")
+    segmentation_dir = op.join(results_dir, "segmentation")
+    decoding_dir = op.join(results_dir, "decoding")
+    performance_dir = op.join(results_dir, "performance")
     templates_dir = op.join(project_dir, "data", "templates")
-    hcp_gradient_dir = op.join(project_dir, "results", "hcp_gradient")
-    gradient_segmentation_dir = op.join(project_dir, "results", "segmentation")
-    gradient_decoding_dir = op.join(project_dir, "results", "decoding")
-    decoding_performance_dir = op.join(project_dir, "results", "performance")
-    # decoding_results_dir = op.join(project_dir, "results", "decoding_results")
-    """
+    # figure_dir = op.join(project_dir, "results", "decoding_results")
+
     # Run Workflow
     # =============
     # 1. Functional Connectivity Gradient
     print("1. Functional Connectivity Gradient", flush=True)
-    principal_gradient_fn = op.join(hcp_gradient_dir, "principal_gradient.npy")
+    principal_gradient_fn = op.join(gradient_dir, "principal_gradient.npy")
     if not op.isfile(principal_gradient_fn):
         principal_gradient = hcp_gradient(data_dir, templates_dir, principal_gradient_fn)
     else:
@@ -932,11 +450,11 @@ def main(project_dir, n_cores):
         principal_gradient = np.load(principal_gradient_fn)
 
     # 2. Segmentation and Gradient Maps
-    n_segments = 30
     print("2. Segmentation and Gradient Maps", flush=True)
-    grad_seg_fn = op.join(gradient_segmentation_dir, "grad_segments.pkl")
+    grad_seg_fn = op.join(segmentation_dir, "grad_segments.pkl")
     if not op.isfile(grad_seg_fn):
-        grad_seg_dict = gradient_segmentation(principal_gradient, grad_seg_fn, n_segments)
+        N_SEGMENTS = 30
+        grad_seg_dict = gradient_segmentation(principal_gradient, grad_seg_fn, N_SEGMENTS)
     else:
         print("\tGradient dict exists. Loading segmented gradient...", flush=True)
         grad_segments_file = open(grad_seg_fn, "rb")
@@ -944,20 +462,29 @@ def main(project_dir, n_cores):
 
     # 3. Meta-Analytic Functional Decoding
     print("3. Meta-Analytic Functional Decoding", flush=True)
-    gradient_decoding(
-        data_dir,
-        gradient_decoding_dir,
-        grad_seg_dict,
-        n_cores,
-    )
-    """
+    n_result_files = len(glob(op.join(decoding_dir, "*", "*.csv")))
+    # if n_result_files < 90 * 18:
+    if n_result_files < 1443:
+        gradient_decoding(
+            data_dir,
+            grad_seg_dict,
+            results_dir,
+            n_cores,
+        )
+    else:
+        print("\tDecoding CSV exist. Skipping functional decoding...", flush=True)
+
     # 4. Performance of Decoding Strategies
     print("4. Performance of Decoding Strategies", flush=True)
-    # grad_seg_fn = op.join(gradient_segmentation_dir, "grad_segments.pkl")
-    # if not op.isfile(grad_seg_fn):
-    performance_df, mean_performance_df = decoding_performance(
-        data_dir, gradient_decoding_dir, decoding_performance_dir
-    )
+    performance_fn = op.join(performance_dir, "performance.tsv")
+    performance_average_fn = op.join(performance_dir, "performance_average.tsv")
+    if not op.isfile(performance_fn) or not op.isfile(performance_average_fn):
+        performance_df, performance_average_df = decoding_performance(
+            data_dir, decoding_dir, performance_dir
+        )
+
+        performance_df.to_csv(performance_fn, sep="\t")
+        performance_average_df.to_csv(performance_average_fn, sep="\t")
 
     # 5. Visualization of the Decoded Maps
     # print("5. Visualization of the Decoded Maps", flush=True)

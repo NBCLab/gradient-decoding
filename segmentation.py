@@ -479,7 +479,7 @@ def gradient_to_maps(method, segments, peaks, grad_seg_dict, output_dir):
 
 def scores_to_gii(scores, lh_fn, rh_fn):
     full_vertices = 64984
-    hemi_vertices = int(full_vertices / 2)
+    hemi_vertices = full_vertices // 2
 
     grad_map_full = add_fslr_medial_wall(scores, split=False)
     grad_map_lh, grad_map_rh = (
