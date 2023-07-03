@@ -1,4 +1,5 @@
 """Miscellaneous functions used for analyses."""
+import logging
 import os
 import os.path as op
 
@@ -7,8 +8,12 @@ import numpy as np
 from matplotlib import pyplot as plt
 from matplotlib.collections import LineCollection
 from neuromaps.datasets import fetch_atlas
+from nibabel import GiftiImage
 from nibabel.gifti import GiftiDataArray
 from sklearn.metrics import pairwise_distances
+from surfplot.utils import add_fslr_medial_wall
+
+LGR = logging.getLogger(__name__)
 
 
 def rm_fslr_medial_wall(data_lh, data_rh, neuromaps_dir, join=True):
@@ -65,7 +70,7 @@ def zero_fslr_medial_wall(data_lh, data_rh, neuromaps_dir):
     medial_arr_rh = nib.load(medial_rh).agg_data()
 
     data_arr_lh = data_lh.agg_data()
-    data_arr_rh = data_lh.agg_data()
+    data_arr_rh = data_rh.agg_data()
     data_arr_lh[np.where(medial_arr_lh == 0)] = 0
     data_arr_rh[np.where(medial_arr_rh == 0)] = 0
 
@@ -182,3 +187,75 @@ def plot_kde_segmentation(n_segment, x_samples, y_densities, min_vals, max_vals,
         pad_inches=0,
     )
     plt.close("all")
+
+
+def _gradient_to_gifti(gradients, subcort_img, principal_gradient_fn, output_dir):
+    """Convert gradient to gifti format"""
+    # Add the medial wall: 32,492 X 32,492 grayordinates = 64,984, for visualization purposes
+    # Get left and rigth hemisphere gradient scores, and insert 0's where medial wall is
+    full_vertices = 64984
+    hemi_vertices = full_vertices // 2
+
+    subcort_dat = subcort_img.get_fdata()
+    subcort_mask = subcort_dat != 0
+    n_subcort_vox = np.where(subcort_mask)[0].shape[0]
+
+    n_gradients = gradients.shape[1]
+    for i in range(n_gradients):
+        cort_grads = gradients[: gradients.shape[0] - n_subcort_vox, i]
+
+        if i == 0:
+            # Save principal gradient
+            principal_gradient = cort_grads.copy()
+            np.save(principal_gradient_fn, principal_gradient)
+
+        grad_map_full = add_fslr_medial_wall(cort_grads, split=False)
+        gradients_lh, gradients_rh = grad_map_full[:hemi_vertices], grad_map_full[hemi_vertices:]
+
+        grad_img_lh = GiftiImage()
+        grad_img_rh = GiftiImage()
+        grad_img_lh.add_gifti_data_array(GiftiDataArray(gradients_lh))
+        grad_img_rh.add_gifti_data_array(GiftiDataArray(gradients_rh))
+
+        gradients_lh_fn = op.join(
+            output_dir,
+            "source-jperaza2022_desc-fcG{:02d}_space-fsLR_den-32k_hemi-L_feature.func.gii".format(
+                i
+            ),
+        )
+        gradients_rh_fn = op.join(
+            output_dir,
+            "source-jperaza2022_desc-fcG{:02d}_space-fsLR_den-32k_hemi-R_feature.func.gii".format(
+                i
+            ),
+        )
+
+        # Write cortical gradient to Gifti file
+        nib.save(grad_img_lh, gradients_lh_fn)
+        nib.save(grad_img_rh, gradients_rh_fn)
+
+    return principal_gradient
+
+
+def _gradient_to_nifti(gradients, subcort_img, output_dir):
+    """Convert sub-cortical gradient to nifti format"""
+    subcort_dat = subcort_img.get_fdata()
+    subcort_mask = subcort_dat != 0
+    n_subcort_vox = np.where(subcort_mask)[0].shape[0]
+
+    n_gradients = gradients.shape[1]
+    for i in range(n_gradients):
+        # Exclude 31,870 voxels form subcortical structures as represented in volumetric space
+        # = 59,412 excluding the medial wall
+        subcort_grads = gradients[gradients.shape[0] - n_subcort_vox :, i]
+
+        subcort_grads_fn = op.join(
+            output_dir,
+            "source-jperaza2022_desc-fcG{:02d}_space-MNI152_den-2mm_feature.nii.gz".format(i),
+        )
+
+        # Write subcortical gradient to Nifti file
+        new_subcort_dat = np.zeros_like(subcort_dat)
+        new_subcort_dat[subcort_mask] = subcort_grads
+        new_subcort_img = nib.Nifti1Image(new_subcort_dat, subcort_img.affine, subcort_img.header)
+        new_subcort_img.to_filename(subcort_grads_fn)
