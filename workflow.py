@@ -286,8 +286,7 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
     frequency_threshold = 0.001
     N_TOP_WORDS = 3
     dset_nms = ["neurosynth", "neuroquery"]
-    # model_nms = ["term", "lda", "gclda"]
-    model_nms = ["lda", "gclda"]
+    model_nms = ["term", "lda", "gclda"]
     segnt_nms = ["Percentile", "KMeans", "KDE"]
     (
         max_corr_lst,
@@ -438,6 +437,11 @@ def main(project_dir, n_cores):
     templates_dir = op.join(project_dir, "data", "templates")
     # figure_dir = op.join(project_dir, "results", "decoding_results")
 
+    N_SEGMENTS = 30
+    N_DSETS = 2
+    N_MODELS = 3
+    N_SEGMODELS = 3
+
     # Run Workflow
     # =============
     # 1. Functional Connectivity Gradient
@@ -453,7 +457,6 @@ def main(project_dir, n_cores):
     print("2. Segmentation and Gradient Maps", flush=True)
     grad_seg_fn = op.join(segmentation_dir, "grad_segments.pkl")
     if not op.isfile(grad_seg_fn):
-        N_SEGMENTS = 30
         grad_seg_dict = gradient_segmentation(principal_gradient, grad_seg_fn, N_SEGMENTS)
     else:
         print("\tGradient dict exists. Loading segmented gradient...", flush=True)
@@ -463,8 +466,8 @@ def main(project_dir, n_cores):
     # 3. Meta-Analytic Functional Decoding
     print("3. Meta-Analytic Functional Decoding", flush=True)
     n_result_files = len(glob(op.join(decoding_dir, "*", "*.csv")))
-    # if n_result_files < 90 * 18:
-    if n_result_files < 1443:
+    if n_result_files < N_DSETS * N_MODELS * N_SEGMODELS * N_SEGMENTS * 3:
+        # if n_result_files < 1443:
         gradient_decoding(
             data_dir,
             grad_seg_dict,
