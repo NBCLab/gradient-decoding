@@ -40,25 +40,6 @@ def plot_gradient(
     sulc_lh, sulc_rh = surfaces["sulc"]
 
     for img_i, (grad_segment_lh, grad_segment_rh) in enumerate(grad_seg_fnames):
-        lh_grad = nib.load(grad_segment_lh).agg_data()
-        rh_grad = nib.load(grad_segment_rh).agg_data()
-
-        if threshold_ is not None:
-            lh_grad = threshold(lh_grad, threshold_)
-            rh_grad = threshold(rh_grad, threshold_)
-
-        if views:
-            p = Plot(surf_lh=lh, views=views, layout=layout)
-            p.add_layer({"left": sulc_lh}, cmap="binary_r", cbar=False)
-            p.add_layer({"left": lh_grad}, cmap=cmap, cbar=cbar, color_range=color_range)
-        else:
-            p = Plot(surf_lh=lh, surf_rh=rh, layout=layout)
-            p.add_layer({"left": sulc_lh, "right": sulc_rh}, cmap="binary_r", cbar=False)
-            p.add_layer(
-                {"left": lh_grad, "right": rh_grad}, cmap=cmap, cbar=cbar, color_range=color_range
-            )
-
-        fig = p.build()
         if grad_seg_labels is None:
             base_name = op.basename(grad_segment_lh)
             firts_name = base_name.split("_")[0].split("-")[1]
@@ -68,14 +49,41 @@ def plot_gradient(
         else:
             title_ = grad_seg_labels[img_i]
 
-        if title:
-            fig.axes[0].set_title(title_, pad=-3)
-
         if out_dir is not None:
             out_file = op.join(out_dir, f"{prefix}{title_}.tiff")
-            plt.savefig(out_file, bbox_inches="tight", dpi=1000)
 
-        plt.show()
+        if not op.isfile(out_file):
+            lh_grad = nib.load(grad_segment_lh).agg_data()
+            rh_grad = nib.load(grad_segment_rh).agg_data()
+
+            if threshold_ is not None:
+                lh_grad = threshold(lh_grad, threshold_)
+                rh_grad = threshold(rh_grad, threshold_)
+
+            if views:
+                p = Plot(surf_lh=lh, views=views, layout=layout)
+                p.add_layer({"left": sulc_lh}, cmap="binary_r", cbar=False)
+                p.add_layer({"left": lh_grad}, cmap=cmap, cbar=cbar, color_range=color_range)
+            else:
+                p = Plot(surf_lh=lh, surf_rh=rh, layout=layout)
+                p.add_layer({"left": sulc_lh, "right": sulc_rh}, cmap="binary_r", cbar=False)
+                p.add_layer(
+                    {"left": lh_grad, "right": rh_grad},
+                    cmap=cmap,
+                    cbar=cbar,
+                    color_range=color_range,
+                )
+
+            fig = p.build()
+
+            if title:
+                fig.axes[0].set_title(title_, pad=-3)
+
+            if out_dir is not None:
+                plt.savefig(out_file, bbox_inches="tight", dpi=500)
+
+            plt.close()
+            plt.clf()
 
 
 def plot_subcortical_gradient(subcort_grad_fnames, cmap="viridis", threshold_=None):
@@ -273,3 +281,28 @@ def plot_mean_profile(data_df, metric, hue_order, cmap="tab20"):
     ax.get_legend().remove()
     # plt.savefig(op.join("./Fig", "mean_correlation_profile.eps"), bbox_inches="tight")
     plt.show()
+
+
+def _get_twfrequencies(dset_nm, model_nm, n_top_terms, dec_data_dir):
+    model_fn = op.join(dec_data_dir, f"{model_nm}_{dset_nm}_model.pkl.gz")
+    model_file = gzip.open(model_fn, "rb")
+    model_obj = pickle.load(model_file)
+
+    topic_word_weights = (
+        model_obj.p_word_g_topic_.T
+        if model_nm == "gclda"
+        else model_obj.distributions_["p_topic_g_word"]
+    )
+
+    n_topics = topic_word_weights.shape[0]
+    sorted_weights_idxs = np.argsort(-topic_word_weights, axis=1)
+    frequencies_lst = []
+    for topic_i in range(n_topics):
+        frequencies = topic_word_weights[topic_i, sorted_weights_idxs[topic_i, :]][
+            :n_top_terms
+        ].tolist()
+        frequencies = [freq / np.max(frequencies) for freq in frequencies]
+        frequencies = np.round(frequencies, 3).tolist()
+        frequencies_lst.append(frequencies)
+
+    return frequencies_lst
