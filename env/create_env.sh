@@ -5,6 +5,5 @@ conda create -p /home/data/nbc/misc-projects/Peraza_GradientDecoding/env/conda_e
 conda config --append envs_dirs /home/data/nbc/misc-projects/Peraza_GradientDecoding/env
 
 source activate /home/data/nbc/misc-projects/Peraza_GradientDecoding/env/conda_env
-pip install black flake8 isort numpy nibabel brainspace neuromaps surfplot scikit-learn ipykernel \
-            biopython git+https://github.com/JulioAPeraza/NiMARE.git@gradient-decoding \
-            sklearn-evaluation seaborn netneurotools git+https://github.com/amueller/word_cloud.git
+pip install black flake8 isort 'gradec==0.0.1rc3' brainspace mapalign scikit-learn ipykernel \
+    seaborn netneurotools git+https://github.com/amueller/word_cloud.git
