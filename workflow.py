@@ -32,6 +32,11 @@ from segmentation import (
     gradient_to_maps,
 )
 
+N_SEGMENTS = 30
+N_DSETS = 2
+N_MODELS = 3
+N_SEGMODELS = 3
+
 DEC_MODELS = {
     "term": TermDecoder,
     "lda": LDADecoder,
@@ -405,23 +410,6 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
     return data_df, mean_data_df
 
 
-def decoding_results():
-    """5. Visualization of the Decoded Maps: Investigate four visualization approaches for
-    reporting decoded gradient results and assess each via a community survey.
-
-    5.1.
-
-    Parameters
-    ----------
-    none : :obj:``
-    Returns
-    -------
-    None : :obj:``
-    """
-
-    return None
-
-
 def main(project_dir, n_cores):
     n_cores = int(n_cores)
     project_dir = op.abspath(project_dir)
@@ -435,12 +423,6 @@ def main(project_dir, n_cores):
     decoding_dir = op.join(results_dir, "decoding")
     performance_dir = op.join(results_dir, "performance")
     templates_dir = op.join(project_dir, "data", "templates")
-    # figure_dir = op.join(project_dir, "results", "decoding_results")
-
-    N_SEGMENTS = 30
-    N_DSETS = 2
-    N_MODELS = 3
-    N_SEGMODELS = 3
 
     # Run Workflow
     # =============
@@ -467,7 +449,6 @@ def main(project_dir, n_cores):
     print("3. Meta-Analytic Functional Decoding", flush=True)
     n_result_files = len(glob(op.join(decoding_dir, "*", "*.csv")))
     if n_result_files < N_DSETS * N_MODELS * N_SEGMODELS * N_SEGMENTS * 3:
-        # if n_result_files < 1443:
         gradient_decoding(
             data_dir,
             grad_seg_dict,
@@ -488,10 +469,6 @@ def main(project_dir, n_cores):
 
         performance_df.to_csv(performance_fn, sep="\t")
         performance_average_df.to_csv(performance_average_fn, sep="\t")
-
-    # 5. Visualization of the Decoded Maps
-    # print("5. Visualization of the Decoded Maps", flush=True)
-    # decoding_results(performance_df)
 
 
 def _main(argv=None):

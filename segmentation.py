@@ -18,8 +18,6 @@ from tqdm import tqdm
 
 import utils
 
-# from scipy.stats import zscore
-
 
 class Segmentation(metaclass=ABCMeta):
     """Base class for segmentation methods."""
@@ -101,9 +99,8 @@ class PCTLSegmentation(Segmentation):
 
             gradient_maps = []
             labels_arr = np.zeros_like(gradient)
-            map_bounds = []
             map_peaks = []
-            map_bounds.append(gradient.min())
+            map_bounds = [gradient.min()]
             for i, bin in enumerate(bins):
                 # Get boundary points
                 min_, max_ = np.percentile(gradient[np.where(gradient)], bin)
@@ -286,11 +283,8 @@ class KDESegmentation(Segmentation):
         else:
             bandwidths = np.load(bandwidth_used_fn)
 
-        segments = []
-        labels = []
-        boundaries = []
-        peaks = []
         bandwidth_i = 0
+        segments, labels, boundaries, peaks = [], [], [], []
         for n_segment in tqdm(range(self.min_n_segments, self.n_segments + self.min_n_segments)):
             n_kde_segments = 0
             while n_segment != n_kde_segments:
@@ -340,8 +334,7 @@ class KDESegmentation(Segmentation):
 
             gradient_maps = []
             labels_arr = np.zeros_like(gradient)
-            map_bounds = []
-            map_bounds.append(gradient.min())
+            map_bounds = [gradient.min()]
             for i in range(n_kde_segments):
                 # Get boundary points
                 if i == 0:
@@ -448,10 +441,6 @@ def gradient_to_maps(method, segments, peaks, grad_seg_dict, output_dir):
             # Translate relative to zero
             grad_map_min = grad_map[vrtxs_non_zero].min()
             grad_map[vrtxs_non_zero] = np.abs(grad_map_min) + grad_map[vrtxs_non_zero]
-
-            # The resulting segment’s map was standardized into a z-score map
-            # grad_map = abs(grad_map)
-            # grad_map = zscore(grad_map)
             grad_maps.append(grad_map)
 
             grad_map_lh_fn = op.join(
