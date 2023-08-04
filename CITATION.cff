@@ -25,10 +25,10 @@ message: If you use this code, please cite it as below.
 repository-code: https://github.com/NBCLab/gradient-decoding
 
 identifiers:
-  - description: Meta-analytic decoding of the cortical gradient of functional connectivity
-    type: doi
+  - type: doi
     value: https://doi.org/10.1101/2023.08.01.551505
-
+    description: Meta-analytic decoding of the cortical gradient of functional connectivity
+    
 contact:
   - given-names: Julio A
     family-names: Peraza
