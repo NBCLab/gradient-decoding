@@ -70,6 +70,10 @@ Alternatively, users can adapt and use our SLURM submission script: `./jobs/run_
 sbatch ./jobs/run_workflow.sh
 ```
 
+## Citation
+
+If you use this code in your research, please acknowledge this work by citing the paper: https://doi.org/10.1101/2023.08.01.551505.
+
 ## Note
 
 The code in this repository should be used only for reproducibility purposes of the linked paper.
