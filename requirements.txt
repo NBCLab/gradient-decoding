@@ -1,12 +1,12 @@
-nimare=0.1.0 # for gradec
-neuromaps=0.0.4 # for gradec
-scipy=1.7.3 # for gradec
-surfplot=0.2.0 # for gradec and figures
-gradec=0.0.1rc3 # for gradient decoding
-brainspace=0.1.10 # for dimensionality reduction
-mapalign=0.3.0 # for dimensionality reduction
-scikit-learn=1.2.2 # for performance metrics
-ipykernel=6.23.1 # for jupyter notebooks in figures
-seaborn=0.11.0 # for figures
-netneurotools=0.2.3 # for generating spin samples
-wordcloud=1.9.2 # for figures
+nimare==0.1.0 # for gradec
+neuromaps==0.0.4 # for gradec
+scipy==1.7.3 # for gradec
+surfplot==0.2.0 # for gradec and figures
+gradec==0.0.1rc3 # for gradient decoding
+brainspace==0.1.10 # for dimensionality reduction
+mapalign==0.3.0 # for dimensionality reduction
+scikit-learn==1.2.2 # for performance metrics
+ipykernel==6.23.1 # for jupyter notebooks in figures
+seaborn==0.11.0 # for figures
+netneurotools==0.2.3 # for generating spin samples
+wordcloud==1.9.2 # for figures
