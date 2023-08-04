@@ -6,16 +6,37 @@ This repository contains all code required to reproduce the analyses and figures
 "Meta-analytic decoding of the cortical gradient of functional connectivity" paper.
 See the preprint version for more details: https://doi.org/10.1101/2023.08.01.551505
 
-## Hot to use
-In order to execute the workflow (`workflow.py`), you will need install all of the Python libraries 
+## How to use
+
+### 1. Install dependencies
+
+In order to execute the workflow (`workflow.py`), you will need to install all of the Python libraries 
 that are required. The required library and associated versions are available in `requirements.txt`.
 
-The easiest way to install the necessary requirements is with Conda.
+The easiest way to install the requirements is with Conda.
 
 ```python
 conda create -p /path/to/gradientdec_env pip python=3.9
 conda activate /path/to/gradientdec_env
 pip install -r requirements.txt
+```
+### 2. Download data files
+
+The analysis workflow is computationally intensive. If a user would like to skip any step, they will need to 
+download the necessary files in `data` and `results` from our OSF page: https://osf.io/xzfrt/. 
+
+### 3. Run the workflow
+
+To run the workflow, create a project directory `PROJECT_DIR`, and execute the command:
+
+```
+python workflow.py --project_dir ${PROJECT_DIR} --n_cores 1
+```
+
+Alternatively, users can adapt and use our SLURM submission script: `./jobs/run_workflow.sh`.
+
+```
+sbatch ./jobs/run_workflow.sh
 ```
 
 ## Workflow
