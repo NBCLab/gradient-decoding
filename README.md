@@ -21,7 +21,7 @@ pip install -r requirements.txt
 ## Workflow
 The workflow consists of the following steps:
 
-1. Functional Conectivity Gradients:
+1. Functional Connectivity Gradients:
     * HCP S1200 resting-state fMRI data were used to generate functional connectivity and compute 
     the affinity matrix.
     * Diffusion map embedding was applied to identify the principal gradient of functional 
@@ -45,3 +45,6 @@ The workflow consists of the following steps:
 5. Visualization of the Decoded Maps:
     * Finally, we select the strategy with better performance across metrics for visualization, 
     where the non-functional terms were removed from the model.
+
+![Fig-01](https://github.com/NBCLab/gradient-decoding/assets/52050407/a61f4998-23f8-4657-bf6c-00528775be06)
+
