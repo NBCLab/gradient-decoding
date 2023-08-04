@@ -76,6 +76,6 @@ If you use this code in your research, please acknowledge this work by citing th
 
 ## Note
 
-The code in this repository should be used only for reproducibility purposes of the linked paper.
+The script `workflow.py` should be used only for reproducibility purposes of the linked paper.
 In order to perform the proposed analysis in your data, please refer to the Python package 
 [Gradec](https://github.com/JulioAPeraza/gradec).
