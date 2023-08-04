@@ -1,0 +1,111 @@
+cff-version: 1.2.0
+
+title: Meta-analytic decoding of the cortical gradient of functional connectivity
+
+abstract: |
+  Macroscale gradients have emerged as a central principle for understanding functional brain 
+  organization. Previous studies have demonstrated that a principal gradient of connectivity in 
+  the human brain exists, with unimodal primary sensorimotor regions situated at one end, and 
+  transmodal regions associated with the default mode network and representative of abstract 
+  functioning at the other. The functional significance and interpretation of macroscale gradients 
+  remains a central topic of discussion in the neuroimaging community, with some studies 
+  demonstrating that gradients may be described using meta-analytic functional decoding techniques. 
+  However, additional methodological development is necessary to more fully leverage available 
+  meta-analytic methods and resources and quantitatively evaluate their relative performance. 
+  Here, we conducted a comprehensive series of analyses to investigate and improve the framework 
+  of data-driven, meta-analytic methods, thereby establishing a principled approach for gradient 
+  segmentation and functional decoding. We found that a small number of segments determined by a 
+  K-means segmentation approach and an LDA-based meta-analysis combined with the NeuroQuery 
+  database was the optimal combination of methods for decoding functional connectivity gradients. 
+  Taken together, the current work aims to provide recommendations on best practices, along with 
+  flexible methods, for gradient-based functional decoding of fMRI data.
+
+message: If you use this code, please cite it as below.
+
+repository-code: https://github.com/NBCLab/gradient-decoding
+
+identifiers:
+  - description: Meta-analytic decoding of the cortical gradient of functional connectivity
+    type: doi
+    value: https://doi.org/10.1101/2023.08.01.551505
+
+contact:
+  - given-names: Julio A
+    family-names: Peraza
+    email: jperaza@fiu.edu
+    affiliation: Department of Physics, Florida International University, Miami, FL, USA
+
+license: Apache License 2.0
+
+authors:
+  - given-names: Julio A
+    family-names: Peraza
+    orcid: 0000-0003-3816-5903
+    affiliation: Department of Physics, Florida International University, Miami, FL, USA
+  - given-names: Taylor
+    family-names: Salo
+    orcid: 0000-0001-9813-3167
+    affiliation: Department of Psychiatry, University of Pennsylvania, Philadelphia, PA, USA
+  - given-names: Michael C
+    family-names: Michael
+    orcid: 0000-0002-1860-4449
+    affiliation: LTI Engineering and Software, Quebec City, QC, Canada
+  - given-names: Katherine L
+    family-names: Bottenhorn
+    orcid: 0000-0002-7796-8795
+    affiliation: Department of Population and Public Health Sciences, University of Southern California, Los Angeles, CA, USA
+  - given-names: Jean-Baptiste
+    family-names: Poline
+    orcid: 0000-0002-9794-749X
+    affiliation: Department of Neurology and Neurosurgery, McGill University, Montreal, QC, Canada
+  - given-names: Jérôme
+    family-names: Dockès
+    orcid: 0000-0002-5304-2496
+    affiliation: Department of Neurology and Neurosurgery, McGill University, Montreal, QC, Canada
+  - given-names: James D
+    family-names: Kent
+    orcid: 0000-0002-4892-2659
+    affiliation: Department of Psychology, University of Texas at Austin, Austin, TX, USA 
+  - given-names: Jessica E
+    family-names: Bartley
+    orcid: 0000-0001-7269-9701
+    affiliation: Department of Physics, Florida International University, Miami, FL, USA
+  - given-names: Jessica S
+    family-names: Flannery
+    orcid: 0000-0003-3274-1578
+    affiliation: Department of Psychology and Neuroscience, University of North Carolina, Chapel Hill, NC, USA
+  - given-names: Lauren D
+    family-names: Hill-Bowen
+    orcid: 0000-0002-9817-7757
+    affiliation: Department of Psychology, Florida International University, Miami, FL, USA
+  - given-names: Rosario
+    family-names: Pintos Lobo
+    orcid: 0000-0002-7679-1385
+    affiliation: Department of Psychology, Florida International University, Miami, FL, USA
+  - given-names: Ranjita
+    family-names: Poudel
+    orcid: 0000-0003-4343-1153
+    affiliation: Department of Health Outcomes and Behavior, Moffitt Cancer Center, Tampa, FL, USA
+  - given-names: Kimberly L
+    family-names: Ray
+    orcid: 0000-0003-1302-2834
+    affiliation: Department of Psychology, University of Texas at Austin, Austin, TX, USA 
+  - given-names: Jennifer L
+    family-names: Robinson
+    orcid: 0000-0001-7389-3047
+    affiliation: Department of Psychology, Auburn University, Auburn, AL, USA
+  - given-names: Robert W
+    family-names: Laird
+    affiliation: Department of Physics, Florida International University, Miami, FL, USA
+  - given-names: Matthew T
+    family-names: Sutherland
+    orcid: 0000-0002-6091-4037
+    affiliation: Department of Psychology, Florida International University, Miami, FL, USA
+  - given-names: Alejandro
+    family-names: de la Vega
+    orcid: 0000-0001-9062-3778
+    affiliation: Department of Psychology, University of Texas at Austin, Austin, TX, USA 
+  - given-names: Angela R
+    family-names: Laird
+    orcid: 0000-0003-3379-8744
+    affiliation: Department of Physics, Florida International University, Miami, FL, USA
