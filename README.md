@@ -70,7 +70,7 @@ Alternatively, users can adapt and use our SLURM submission script: `./jobs/run_
 sbatch ./jobs/run_workflow.sh
 ```
 
-## How to use
+## Note
 
 The code in this repository should be used only for reproducibility purposes of the linked paper.
 In order to perform the proposed analysis in your data, please refer to the Python package 
