@@ -16,23 +16,13 @@ from gradec.fetcher import _fetch_features
 from gradec.utils import _conform_features
 
 import utils
-from performance import (
-    _combine_counts,
-    _get_ic,
-    _get_semantic_similarity,
-    _get_tfidf,
-    _get_twfrequencies,
-    classifier,
-)
-from segmentation import (
-    KDESegmentation,
-    KMeansSegmentation,
-    PCTLSegmentation,
-    compare_segmentations,
-    gradient_to_maps,
-)
+from performance import (_combine_counts, _get_ic, _get_semantic_similarity,
+                         _get_tfidf, _get_twfrequencies, classifier)
+from segmentation import (KDESegmentation, KMeansSegmentation,
+                          PCTLSegmentation, compare_segmentations,
+                          gradient_to_maps)
 
-N_SEGMENTS = 30
+N_SEGMENTS = 31
 N_DSETS = 2
 N_MODELS = 3
 N_SEGMODELS = 3
@@ -84,10 +74,15 @@ def hcp_gradient(data_dir, template_dir, principal_gradient_fn, pypackage="mapal
     gradients_fn = op.join(output_dir, "gradients.npy")
     lambdas_fn = op.join(output_dir, "lambdas.npy")
     if not (op.isfile(gradients_fn) and op.isfile(lambdas_fn)):
-        print("\t\tLoading connenctivity mtx and apply Fisher's z-to-r transform...", flush=True)
+        print(
+            "\t\tLoading connenctivity mtx and apply Fisher's z-to-r transform...",
+            flush=True,
+        )
         dcon_img = nib.load(
             op.join(
-                data_dir, "hcp", "HCP_S1200_1003_rfMRI_MSMAll_groupPCA_d4500ROW_zcorr.dconn.nii"
+                data_dir,
+                "hcp",
+                "HCP_S1200_1003_rfMRI_MSMAll_groupPCA_d4500ROW_zcorr.dconn.nii",
             )
         )
         dcon_mtx = np.tanh(dcon_img.get_fdata())  # 91,282 X 91,282 grayordinates
@@ -104,7 +99,9 @@ def hcp_gradient(data_dir, template_dir, principal_gradient_fn, pypackage="mapal
             pickle.dump(statistics, open(op.join(output_dir, "statistics.p"), "wb"))
             lambdas = statistics["lambdas"]
         elif pypackage == "brainspace":
-            gm = GradientMaps(n_components=10, random_state=0, kernel="cosine", approach="dm")
+            gm = GradientMaps(
+                n_components=10, random_state=0, kernel="cosine", approach="dm"
+            )
             gm.fit(dcon_mtx, sparsity=0.9, n_iter=10)
             gradients, lambdas = gm.gradients_, gm.lambdas_
 
@@ -194,8 +191,13 @@ def gradient_segmentation(gradient, grad_seg_fn, n_segments):
             kde_labels = labels.copy()
 
         # 2.2. Transform KDE segmented gradient maps to activation maps.
-        print(f"\t\tTransforming {method} segmented grad maps to activation maps...", flush=True)
-        grad_seg_dict = gradient_to_maps(method, segments, peaks, grad_seg_dict, spc_output_dir)
+        print(
+            f"\t\tTransforming {method} segmented grad maps to activation maps...",
+            flush=True,
+        )
+        grad_seg_dict = gradient_to_maps(
+            method, segments, peaks, grad_seg_dict, spc_output_dir
+        )
 
     with open(grad_seg_fn, "wb") as grad_segments_file:
         pickle.dump(grad_seg_dict, grad_segments_file)
@@ -204,7 +206,9 @@ def gradient_segmentation(gradient, grad_seg_fn, n_segments):
     silhouette_df_fn = op.join(output_dir, "silhouette_scores.csv")
     # if not op.isfile(silhouette_df_fn):
     print("\tCalculating Silhouette measures...", flush=True)
-    compare_segmentations(gradient, percent_labels, kmeans_labels, kde_labels, silhouette_df_fn)
+    compare_segmentations(
+        gradient, percent_labels, kmeans_labels, kde_labels, silhouette_df_fn
+    )
 
     return grad_seg_dict
 
@@ -230,15 +234,21 @@ def gradient_decoding(data_dir, grad_seg_dict, output_dir, n_cores):
     dset_nms = ["neurosynth", "neuroquery"]
     model_nms = ["term", "lda", "gclda"]
     segnt_nms = ["Percentile", "KMeans", "KDE"]
-    for dset_nm, model_nm, segnt_nm in itertools.product(dset_nms, model_nms, segnt_nms):
+    for dset_nm, model_nm, segnt_nm in itertools.product(
+        dset_nms, model_nms, segnt_nms
+    ):
         corr_dir = op.join(output_dir, f"{dset_nm}_{model_nm}_corr_{segnt_nm}")
         os.makedirs(corr_dir, exist_ok=True)
 
         grad_segments = grad_seg_dict[f"{segnt_nm.lower()}_grad_segments"]
         for grad_maps in grad_segments:
-            decode = DEC_MODELS[model_nm](n_samples=N_SAMPLES, data_dir=data_dir, n_cores=n_cores)
+            decode = DEC_MODELS[model_nm](
+                n_samples=N_SAMPLES, data_dir=data_dir, n_cores=n_cores
+            )
             decode.fit(dset_nm)
-            corrs_df, pvals_df, pvals_FDR_df = decode.transform(grad_maps, method="correlation")
+            corrs_df, pvals_df, pvals_FDR_df = decode.transform(
+                grad_maps, method="correlation"
+            )
 
             n_segments = len(grad_maps)
             corrs_df.to_csv(op.join(corr_dir, f"corrs_{n_segments:02d}.csv"))
@@ -246,7 +256,7 @@ def gradient_decoding(data_dir, grad_seg_dict, output_dir, n_cores):
             pvals_FDR_df.to_csv(op.join(corr_dir, f"pvals-FDR_{n_segments:02d}.csv"))
 
 
-def decoding_performance(data_dir, dec_data_dir, output_dir):
+def decoding_performance(data_dir, results_dir, output_dir):
     """4. Performance of Decoding Strategies: Evaluate the different decoding strategies using
     multiple metrics to compare relative performance.
 
@@ -263,6 +273,9 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
     -------
     None : :obj:``
     """
+    segmentation_dir = op.join(results_dir, "segmentation")
+    decoding_dir = op.join(results_dir, "decoding")
+
     os.makedirs(output_dir, exist_ok=True)
     models_dir = op.join(data_dir, "models")
 
@@ -292,7 +305,7 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
     N_TOP_WORDS = 3
     dset_nms = ["neurosynth", "neuroquery"]
     model_nms = ["term", "lda", "gclda"]
-    segnt_nms = ["Percentile", "KMeans", "KDE"]
+    segnt_nms = ["PCT", "KMeans", "KDE"]
     (
         max_corr_lst,
         idx_lst,
@@ -300,18 +313,20 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
         max_pval_lst,
         max_fdr_pval_lst,
         segments_lst,
+        seg_size_lst,
         method_lst,
         seg_sol_lst,
         ic_lst,
         tfidf_lst,
         classification_lst,
+        mean_seg_size_lst,
         mean_corr_lst,
         mean_seg_sol_lst,
         mean_ic_lst,
         mean_tfidf_lst,
         mean_method_lst,
         snr_lst,
-    ) = ([] for _ in range(17))
+    ) = ([] for _ in range(19))
     for dset_nm, model_nm in itertools.product(dset_nms, model_nms):
         # Get topic-wise frequencies
         # We don't need weights for classifying terms
@@ -323,34 +338,43 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
 
         # Get and classify features
         features = _fetch_features(dset_nm, model_nm, data_dir=data_dir)
-        features = _conform_features(features, N_TOP_WORDS, model_nm)
+        features = _conform_features(features, model_nm, N_TOP_WORDS)
         features_arr = np.array(features)
         features_classified = classifier(
             features_arr, N_TOP_WORDS, frequencies, dset_nm, model_nm, data_dir
         )
 
         for segnt_nm in segnt_nms:
-            corr_dir = op.join(dec_data_dir, f"{dset_nm}_{model_nm}_corr_{segnt_nm}")
+            seg_dict_fn = op.join(segmentation_dir, f"new_{segnt_nm}_results.pkl")
+            with open(seg_dict_fn, "rb") as seg_dict_file:
+                seg_dict = pickle.load(seg_dict_file)
+
+            corr_dir = op.join(decoding_dir, f"{dset_nm}_{model_nm}_corr_{segnt_nm}")
             corr_lst = sorted(glob(op.join(corr_dir, "corrs_*.csv")))
             pval_lst = sorted(glob(op.join(corr_dir, "pvals_*.csv")))
             pval_fdr_lst = sorted(glob(op.join(corr_dir, "pvals-FDR_*.csv")))
 
             for corr_fn, pval_fn, pval_fdr_fn in zip(corr_lst, pval_lst, pval_fdr_lst):
-                corr_df = pd.read_csv(corr_fn, index_col="feature")
-                pval_df = pd.read_csv(pval_fn, index_col="feature")
-                pval_fdr_df = pd.read_csv(pval_fdr_fn, index_col="feature")
+                print(corr_fn)
+                # index_col="feature"
+                corr_df = pd.read_csv(corr_fn)
+                pval_df = pd.read_csv(pval_fn)
+                pval_fdr_df = pd.read_csv(pval_fdr_fn)
 
                 # Get maximum correlation and corresponding feature
-                max_df = corr_df.idxmax()
+                max_df = corr_df.iloc[:, 1:].idxmax()  # exlude feature columns
+                # max_df = corr_df.idxmax()
                 max_idx = corr_df.index.get_indexer(max_df.values)
                 max_corr = np.diag(corr_df.loc[max_df.values, max_df.index])
                 max_pval = np.diag(pval_df.loc[max_df.values, max_df.index])
                 max_fdr_pval = np.diag(pval_fdr_df.loc[max_df.values, max_df.index])
-                max_features = max_df.values
+                # max_features = max_df.values
+                max_features = corr_df.loc[max_idx, "feature"].to_list()
                 max_feature_clss = features_classified[max_idx]
 
                 # Get information content, and tfidf per max features
-                n_seg = corr_df.shape[1]
+                # n_seg = corr_df.shape[1]
+                n_seg = corr_df.shape[1] - 1
                 segments = np.arange(1, n_seg + 1)
                 temp_ic_lst, temp_tfidf_lst = _get_semantic_similarity(
                     model_nm,
@@ -362,11 +386,19 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
                 )
 
                 # Calculate SNR per max features
-                snr = sum(np.array(max_feature_clss) == "Functional") / len(max_feature_clss)
+                snr = sum(np.array(max_feature_clss) == "Functional") / len(
+                    max_feature_clss
+                )
+
+                # Size of segment solution
+                sub_seg_size = []
+                for segm in segments:
+                    sub_seg_size.append(sum(seg_dict["labels"][n_seg - 2] == segm - 1))
 
                 # Append values for performance DF
                 method_lst.append([f"{model_nm}_{dset_nm}_{segnt_nm}"] * n_seg)
                 segments_lst.append(segments)
+                seg_size_lst.append(sub_seg_size)
                 seg_sol_lst.append([f"{n_seg}"] * n_seg)
                 max_corr_lst.append(max_corr)
                 max_pval_lst.append(max_pval)
@@ -380,6 +412,7 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
                 # Append values for average performance DF
                 mean_method_lst.append(f"{model_nm}_{dset_nm}_{segnt_nm}")
                 mean_seg_sol_lst.append(f"{n_seg}")
+                mean_seg_size_lst.append(np.mean(sub_seg_size))
                 mean_corr_lst.append(np.mean(max_corr))
                 mean_ic_lst.append(np.mean(temp_ic_lst))
                 mean_tfidf_lst.append(np.mean(temp_tfidf_lst))
@@ -389,6 +422,7 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
     data_df = pd.DataFrame()
     data_df["method"] = np.hstack(method_lst)
     data_df["segment"] = np.hstack(segments_lst)
+    data_df["segment_size"] = np.hstack(seg_size_lst)
     data_df["segment_solution"] = np.hstack(seg_sol_lst)
     data_df["max_corr"] = np.hstack(max_corr_lst)
     data_df["pvalue"] = np.hstack(max_pval_lst)
@@ -401,6 +435,7 @@ def decoding_performance(data_dir, dec_data_dir, output_dir):
 
     mean_data_df = pd.DataFrame()
     mean_data_df["method"] = np.hstack(mean_method_lst)
+    mean_data_df["segment_size"] = np.hstack(mean_seg_size_lst)
     mean_data_df["segment_solution"] = mean_seg_sol_lst
     mean_data_df["max_corr"] = np.hstack(mean_corr_lst)
     mean_data_df["ic"] = np.hstack(mean_ic_lst)
@@ -430,7 +465,9 @@ def main(project_dir, n_cores):
     print("1. Functional Connectivity Gradient", flush=True)
     principal_gradient_fn = op.join(gradient_dir, "principal_gradient.npy")
     if not op.isfile(principal_gradient_fn):
-        principal_gradient = hcp_gradient(data_dir, templates_dir, principal_gradient_fn)
+        principal_gradient = hcp_gradient(
+            data_dir, templates_dir, principal_gradient_fn
+        )
     else:
         print("\tGradient file exists. Loading principal gradient...", flush=True)
         principal_gradient = np.load(principal_gradient_fn)
@@ -439,7 +476,9 @@ def main(project_dir, n_cores):
     print("2. Segmentation and Gradient Maps", flush=True)
     grad_seg_fn = op.join(segmentation_dir, "grad_segments.pkl")
     if not op.isfile(grad_seg_fn):
-        grad_seg_dict = gradient_segmentation(principal_gradient, grad_seg_fn, N_SEGMENTS)
+        grad_seg_dict = gradient_segmentation(
+            principal_gradient, grad_seg_fn, N_SEGMENTS
+        )
     else:
         print("\tGradient dict exists. Loading segmented gradient...", flush=True)
         grad_segments_file = open(grad_seg_fn, "rb")
@@ -464,11 +503,13 @@ def main(project_dir, n_cores):
     performance_average_fn = op.join(performance_dir, "performance_average.tsv")
     if not op.isfile(performance_fn) or not op.isfile(performance_average_fn):
         performance_df, performance_average_df = decoding_performance(
-            data_dir, decoding_dir, performance_dir
+            data_dir, results_dir, performance_dir
         )
 
         performance_df.to_csv(performance_fn, sep="\t")
         performance_average_df.to_csv(performance_average_fn, sep="\t")
+
+    # 5. Multidimensional Decoding. See figures/12_high-dim-decoding.ipynb
 
 
 def _main(argv=None):

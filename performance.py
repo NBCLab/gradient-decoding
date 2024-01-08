@@ -28,7 +28,7 @@ def _get_semantic_similarity(
             )
 
         else:
-            sub_max_features = max_feature.split("_")[1:]  # when the index is included
+            sub_max_features = max_feature.split("_")  # [1:] when the index is included
             assert len(sub_max_features) == n_top_terms
 
             sub_ic_lst, sub_tfidf_lst = [], []
@@ -68,14 +68,22 @@ def _find_category(classification_df, term, idx_col, col_name):
 
 
 def neuroquery_annot(features, ns_classification_df, nq_classification_df):
-    nq_2_ns = {"anatomy": "Anatomical", "disease": "Clinical", "psychology": "Functional"}
+    nq_2_ns = {
+        "anatomy": "Anatomical",
+        "disease": "Clinical",
+        "psychology": "Functional",
+    }
 
     classification_lst = []
     for term in features:
-        classification = _find_category(ns_classification_df, term, "FEATURE", "Classification")
+        classification = _find_category(
+            ns_classification_df, term, "FEATURE", "Classification"
+        )
         if classification is None:
             for idx_col in ["term", "normalized_term"]:
-                classification = _find_category(nq_classification_df, term, idx_col, "category")
+                classification = _find_category(
+                    nq_classification_df, term, idx_col, "category"
+                )
                 if classification is not None:
                     break
 
@@ -97,7 +105,9 @@ def neuroquery_annot(features, ns_classification_df, nq_classification_df):
 
 
 def _nq_term_classifier(data_dir, features, ns_term_class_df, nq_term_class_fn):
-    nq_categories_fn = op.join(data_dir, "raw", "data-neuroquery_version-1_termcategories.csv")
+    nq_categories_fn = op.join(
+        data_dir, "raw", "data-neuroquery_version-1_termcategories.csv"
+    )
     nq_categories_df = pd.read_csv(nq_categories_fn)
 
     result = neuroquery_annot(features, ns_term_class_df, nq_categories_df)
@@ -171,7 +181,11 @@ def classifier(terms, n_top_terms, weights, dset_nm, model_nm, data_dir):
 
     if not op.isfile(ns_term_class_fn):
         crowdsourced_files = sorted(
-            glob(op.join(class_dir, "raw", "CrowdsourcedNeurosynthTermClassifications-*.*"))
+            glob(
+                op.join(
+                    class_dir, "raw", "CrowdsourcedNeurosynthTermClassifications-*.*"
+                )
+            )
         )
         ns_term_class_df = crowdsourced_annot(crowdsourced_files)
         ns_term_class_df.to_csv(ns_term_class_fn)
@@ -222,7 +236,9 @@ def _get_tfidf(counts_df):
     tfidf_tr = TfidfTransformer()
     X = counts_df.to_numpy()
     X_tr = tfidf_tr.fit_transform(X)
-    return pd.DataFrame(X_tr.toarray(), index=counts_df.index, columns=counts_df.columns)
+    return pd.DataFrame(
+        X_tr.toarray(), index=counts_df.index, columns=counts_df.columns
+    )
 
 
 def _combine_counts(class_data_dir):
@@ -235,7 +251,9 @@ def _combine_counts(class_data_dir):
     counts_df = counts_df.fillna(0)
     for col in counts_df.columns:
         if (col.endswith("_x") or col.endswith("_y")) and col in counts_df.columns:
-            counts_df[col[:-2]] = counts_df[col[:-2] + "_x"] + counts_df[col[:-2] + "_y"]
+            counts_df[col[:-2]] = (
+                counts_df[col[:-2] + "_x"] + counts_df[col[:-2] + "_y"]
+            )
             counts_df.drop([col[:-2] + "_x", col[:-2] + "_y"], axis=1, inplace=True)
     counts_df = counts_df.sort_index(axis=1)
     return counts_df
