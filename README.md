@@ -20,8 +20,9 @@ The workflow consists of the following steps:
     of brain maps.
     * Three different segmentation approaches were evaluated: percentile-based (PCT), k-means 
     (KMeans), and KDE. 
-    * Individual segments were transformed into “activation” brain maps for decoding. 
-    * The three segmentation approaches were evaluated using the silhouette score. 
+    * Individual segments were transformed into pseudo-activation brain maps for decoding. 
+    * The three segmentation approaches were evaluated using the silhouette, variance ratio,
+    and cluster separation scores. 
 3. Meta-analytic Functional Decoding:
     * Six different meta-analytic decoding strategies were implemented on surface space, derived 
     from three sets of meta-analytic maps (i.e., term-based (Term), LDA, and GCLDA) and two 
@@ -31,11 +32,10 @@ The workflow consists of the following steps:
     * The resultant 18 different decoding strategies were evaluated using four performance metrics,
     assessed by comparing correlation profiles, semantic similarity metrics (i.e., information 
     content (IC) and TFIDF), and signal-to-noise ratio (SNR). 
-5. Visualization of the Decoded Maps:
-    * Finally, we select the strategy with better performance across metrics for visualization, 
-    where the non-functional terms were removed from the model.
+5. Multidimensional Decoding:
+    * Finally, we performed a multidimensional decoding using the first four components together.
 
-![Fig-01](https://github.com/NBCLab/gradient-decoding/assets/52050407/a61f4998-23f8-4657-bf6c-00528775be06)
+![Fig-01](https://github.com/NBCLab/gradient-decoding/assets/52050407/fcdc4ae3-9219-4c58-9d17-8336c56c6bb8)
 
 ## How to use
 
