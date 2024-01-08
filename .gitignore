@@ -27,3 +27,5 @@ temp/
 
 # Figures
 figures/Fig
+
+figures/temp_*
